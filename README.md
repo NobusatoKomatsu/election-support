@@ -63,7 +63,6 @@ Twilio の Verify サービス（名前「みんなの声」）も無ければ�
 ## 手で公開する場合
 
 ```sh
-
 npx wrangler login
 npx wrangler d1 create minnano-koe          # 表示された database_id を wrangler.jsonc に書く
 npx wrangler d1 execute minnano-koe --remote --file=schema.sql
@@ -78,7 +77,6 @@ npx wrangler deploy
 ## 手元で動かす
 
 ```sh
-
 # SMS_DEV_MODE=1 だと SMS を送らず、認証コード 000000 で通る（本番では設定しない）
 printf 'ADMIN_TOKEN=test-admin\nPHONE_PEPPER=dev-pepper\nSMS_DEV_MODE=1\n' > .dev.vars
 npx wrangler d1 execute minnano-koe --local --file=schema.sql
