@@ -412,70 +412,141 @@ function renderResults(r, dim, onDim) {
   box.querySelectorAll('[data-dim]').forEach((b) => { b.onclick = () => onDim(b.dataset.dim); });
 }
 
+// ---------- 管理画面（一覧・作成・編集・削除・CSV） ----------
+
 function pageAdmin() {
   let token = '';
   try { token = sessionStorage.getItem('adminToken') || ''; } catch { /* 使えなくても続行 */ }
-  const pad = (n) => String(n).padStart(2, '0');
-  const local = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  const now = new Date();
-  app.innerHTML = `
-    <h1>管理：テーマを作る</h1>
-    <div class="card">
-      <form id="f">
-        <label>管理者トークン <input name="token" type="password" required value="${esc(token)}"></label>
-        <label>タイトル <input name="title" required maxlength="200"></label>
-        <label>説明 <textarea name="description"></textarea></label>
-        <label>選択肢 <span class="hint">1 行に 1 つ（2〜20 個）</span><textarea name="options" required>賛成\n反対</textarea></label>
-        <label>受付開始 <input name="opens_at" type="datetime-local" required value="${local(now)}"></label>
-        <label>受付終了 <input name="closes_at" type="datetime-local" required value="${local(new Date(now.getTime() + 7 * 86400000))}"></label>
-        <div id="m"></div>
-        <button>作成</button>
-      </form>
-    </div>
-    <h2>投票データを CSV で書き出す</h2>
-    <div class="card">
-      <form id="x">
-        <label>テーマ番号 <input name="id" type="number" min="1" required></label>
-        <p class="muted small" style="margin:0">Google スプレッドシートの「ファイル → インポート」で読み込めます。個人を特定する情報は含みません。</p>
-        <div id="xm"></div>
-        <button class="ghost">ダウンロード</button>
-      </form>
-    </div>`;
   const remember = (t) => { try { sessionStorage.setItem('adminToken', t); } catch { /* 無視 */ } };
-  const f = document.getElementById('f');
-  f.onsubmit = async (e) => {
-    e.preventDefault();
-    const d = formData(f);
-    remember(d.token);
-    try {
-      const res = await api('/admin/polls', {
-        method: 'POST',
-        headers: { authorization: `Bearer ${d.token}` },
-        body: {
-          title: d.title,
-          description: d.description,
-          options: d.options.split('\n'),
-          opens_at: new Date(d.opens_at).getTime(),
-          closes_at: new Date(d.closes_at).getTime(),
-        },
-      });
-      location.hash = `#/poll/${res.id}`;
-    } catch (err) { message(document.getElementById('m'), err.message); }
-  };
-  const x = document.getElementById('x');
-  x.onsubmit = async (e) => {
-    e.preventDefault();
-    const t = f.token.value;
-    remember(t);
-    const id = x.id.value;
-    const res = await fetch(`/api/admin/polls/${id}/export`, { headers: { authorization: `Bearer ${t}` } });
-    if (!res.ok) { message(document.getElementById('xm'), (await res.json().catch(() => ({}))).error || 'ダウンロードできませんでした'); return; }
+  const auth = () => ({ authorization: `Bearer ${token}` });
+  const pad = (n) => String(n).padStart(2, '0');
+  const local = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+
+  function login() {
+    app.innerHTML = `
+      <h1>管理画面</h1>
+      <div class="card">
+        <form id="t">
+          <label>管理者トークン <input name="token" type="password" required autocomplete="current-password"></label>
+          <div id="m"></div>
+          <button>開く</button>
+        </form>
+      </div>`;
+    const f = document.getElementById('t');
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      token = f.token.value;
+      try { await api('/admin/polls', { headers: auth() }); remember(token); list(); }
+      catch (err) { message(document.getElementById('m'), err.message); }
+    };
+  }
+
+  async function list(note = '') {
+    let polls;
+    try { ({ polls } = await api('/admin/polls', { headers: auth() })); }
+    catch { token = ''; remember(''); login(); return; }
+    app.innerHTML = `
+      <div class="row"><h1>管理：テーマ一覧</h1><button id="new">＋ 新しいテーマ</button></div>
+      ${note ? `<div class="msg ok">${esc(note)}</div>` : ''}
+      ${polls.length ? polls.map((p) => `
+        <div class="card">
+          <div class="row"><strong>${esc(p.title)}</strong><span class="badge ${p.status}">${STATUS[p.status]}</span></div>
+          <div class="muted small">#${p.id}　${fmtDate(p.opens_at)} 〜 ${fmtDate(p.closes_at)}　/　投票 ${p.voters} 人</div>
+          <div class="row" style="justify-content:flex-start;margin-top:10px">
+            <button class="ghost" data-edit="${p.id}">編集</button>
+            <button class="ghost" data-csv="${p.id}">CSV</button>
+            <a class="small" href="#/poll/${p.id}">結果を見る</a>
+            <button class="danger" data-del="${p.id}" style="margin-left:auto">削除</button>
+          </div>
+        </div>`).join('') : '<div class="card muted">まだテーマがありません。</div>'}
+      <div id="m"></div>
+      <p class="small"><button class="linkish" id="out">管理画面からログアウト</button></p>`;
+    document.getElementById('new').onclick = () => form(null);
+    document.getElementById('out').onclick = () => { token = ''; remember(''); login(); };
+    app.querySelectorAll('[data-edit]').forEach((b) => { b.onclick = () => form(polls.find((p) => p.id === Number(b.dataset.edit))); });
+    app.querySelectorAll('[data-csv]').forEach((b) => { b.onclick = () => csv(b.dataset.csv); });
+    app.querySelectorAll('[data-del]').forEach((b) => {
+      b.onclick = async () => {
+        const p = polls.find((x) => x.id === Number(b.dataset.del));
+        if (!b.dataset.sure) {
+          b.dataset.sure = '1';
+          b.textContent = p.voters ? `${p.voters} 人の投票も消えます。もう一度押すと削除` : 'もう一度押すと削除';
+          return;
+        }
+        try { await api(`/admin/polls/${p.id}`, { method: 'DELETE', headers: auth() }); list(`「${p.title}」を削除しました`); }
+        catch (err) { message(document.getElementById('m'), err.message); }
+      };
+    });
+  }
+
+  function form(poll) {
+    const now = Date.now();
+    const opts = poll ? poll.options : [{ id: null, label: '賛成', voters: 0 }, { id: null, label: '反対', voters: 0 }];
+    const locked = poll && poll.voters > 0;
+    app.innerHTML = `
+      <p class="small"><button class="linkish" id="back">← テーマ一覧</button></p>
+      <h1>${poll ? 'テーマを編集' : '新しいテーマ'}</h1>
+      <div class="card">
+        <form id="f">
+          <label>タイトル <input name="title" required maxlength="200" value="${esc(poll?.title ?? '')}"></label>
+          <label>説明 <textarea name="description">${esc(poll?.description ?? '')}</textarea></label>
+          <fieldset>
+            <legend>選択肢（2〜20 個）</legend>
+            <div id="opts" style="display:grid;gap:8px"></div>
+            <button type="button" class="ghost" id="add" style="margin-top:8px">＋ 選択肢を追加</button>
+          </fieldset>
+          <label>受付開始 ${locked ? '<span class="hint">投票が入っているため変更できません</span>' : ''}
+            <input name="opens_at" type="datetime-local" required value="${local(poll?.opens_at ?? now)}" ${locked ? 'disabled' : ''}>
+          </label>
+          <label>受付終了 <input name="closes_at" type="datetime-local" required value="${local(poll?.closes_at ?? now + 7 * 86400000)}"></label>
+          <div id="m"></div>
+          <button>${poll ? '保存' : '作成'}</button>
+        </form>
+      </div>`;
+    const box = document.getElementById('opts');
+    const addRow = (o) => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.style.flexWrap = 'nowrap';
+      row.dataset.id = o.id ?? '';
+      row.innerHTML = `<input value="${esc(o.label)}" maxlength="100" aria-label="選択肢" style="flex:1;min-width:0">
+        ${o.voters ? `<span class="muted small" style="white-space:nowrap">${o.voters} 人</span>` : '<button type="button" class="danger" aria-label="この選択肢を削除">×</button>'}`;
+      row.querySelector('button')?.addEventListener('click', () => row.remove());
+      box.appendChild(row);
+    };
+    opts.forEach(addRow);
+    document.getElementById('add').onclick = () => addRow({ id: null, label: '', voters: 0 });
+    document.getElementById('back').onclick = () => list();
+    const f = document.getElementById('f');
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const options = [...box.children].map((r) => ({ id: r.dataset.id ? Number(r.dataset.id) : null, label: r.querySelector('input').value }));
+      const body = {
+        title: f.title.value,
+        description: f.description.value,
+        options,
+        opens_at: locked ? poll.opens_at : new Date(f.opens_at.value).getTime(),
+        closes_at: new Date(f.closes_at.value).getTime(),
+      };
+      try {
+        if (poll) await api(`/admin/polls/${poll.id}`, { method: 'PUT', headers: auth(), body });
+        else await api('/admin/polls', { method: 'POST', headers: auth(), body });
+        list(poll ? '保存しました' : 'テーマを作りました');
+      } catch (err) { message(document.getElementById('m'), err.message); }
+    };
+  }
+
+  async function csv(id) {
+    const res = await fetch(`/api/admin/polls/${id}/export`, { headers: auth() });
+    if (!res.ok) { message(document.getElementById('m'), (await res.json().catch(() => ({}))).error || 'ダウンロードできませんでした'); return; }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(await res.blob());
     a.download = `poll-${id}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
-  };
+  }
+
+  if (token) list(); else login();
 }
 
 // ---------- ルーター ----------

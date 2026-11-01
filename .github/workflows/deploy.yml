@@ -4,6 +4,8 @@ name: みんなの声 を Cloudflare に公開
 on:
   push:
     branches: [main]
+    # 管理アプリだけの変更ではサイトを公開し直さない
+    paths-ignore: ["android/**", ".github/workflows/admin-app.yml"]
   workflow_dispatch:
 
 concurrency: deploy

@@ -1,3 +1,7 @@
 .wrangler/
 node_modules/
 .dev.vars
+android/.gradle/
+android/build/
+android/app/build/
+*.p12

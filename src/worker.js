@@ -484,16 +484,23 @@ function isAdmin(request, env) {
   return Boolean(env.ADMIN_TOKEN) && safeEqual(auth, `Bearer ${env.ADMIN_TOKEN}`);
 }
 
-async function createPoll(request, env) {
-  const body = await readBody(request);
+function validatePollFields(body) {
   const title = String(body.title || '').trim();
   const description = String(body.description || '').trim();
-  const options = (Array.isArray(body.options) ? body.options : []).map((s) => String(s).trim()).filter(Boolean);
   const opensAt = Number(body.opens_at);
   const closesAt = Number(body.closes_at);
   if (!title || title.length > 200) throw bad('タイトルを 200 文字以内で入力してください');
+  if (description.length > 5000) throw bad('説明は 5,000 文字以内にしてください');
+  if (!(opensAt > 0 && closesAt > opensAt)) throw bad('受付期間を正しく入力してください（終了は開始より後）');
+  return { title, description, opensAt, closesAt };
+}
+
+async function createPoll(request, env) {
+  const body = await readBody(request);
+  const { title, description, opensAt, closesAt } = validatePollFields(body);
+  const options = (Array.isArray(body.options) ? body.options : [])
+    .map((o) => String(typeof o === 'object' && o !== null ? o.label : o).trim()).filter(Boolean);
   if (options.length < 2 || options.length > 20) throw bad('選択肢は 2〜20 個にしてください');
-  if (!(opensAt > 0 && closesAt > opensAt)) throw bad('受付期間を正しく入力してください');
   const res = await env.DB.prepare(
     'INSERT INTO polls (title, description, opens_at, closes_at, created_at) VALUES (?, ?, ?, ?, ?)'
   ).bind(title, description, opensAt, closesAt, Date.now()).run();
@@ -501,6 +508,73 @@ async function createPoll(request, env) {
   await env.DB.batch(options.map((label, i) =>
     env.DB.prepare('INSERT INTO options (poll_id, label, sort) VALUES (?, ?, ?)').bind(pollId, label, i)));
   return json({ ok: true, id: pollId }, 201);
+}
+
+// 管理用の一覧（選択肢ごとの投票人数つき）
+async function adminListPolls(env) {
+  const [polls, options, counts] = await env.DB.batch([
+    env.DB.prepare('SELECT * FROM polls ORDER BY opens_at DESC'),
+    env.DB.prepare('SELECT id, poll_id, label FROM options ORDER BY sort, id'),
+    env.DB.prepare('SELECT option_id, COUNT(*) AS n FROM ballots GROUP BY option_id'),
+  ]);
+  const votesByOption = new Map(counts.results.map((r) => [r.option_id, r.n]));
+  return json({
+    polls: polls.results.map((p) => {
+      const opts = options.results.filter((o) => o.poll_id === p.id)
+        .map((o) => ({ id: o.id, label: o.label, voters: votesByOption.get(o.id) || 0 }));
+      return { ...p, status: pollStatus(p), voters: opts.reduce((a, o) => a + o.voters, 0), options: opts };
+    }),
+  });
+}
+
+// テーマの編集。投票が入っている選択肢は消せない。投票が始まったテーマは開始日時を変えられない
+//（開始日時は票の配布に使っているため、動かすと持ち票の計算が変わってしまう）
+async function updatePoll(request, env, id) {
+  const body = await readBody(request);
+  const poll = await env.DB.prepare('SELECT * FROM polls WHERE id = ?').bind(id).first();
+  if (!poll) return fail('投票テーマが見つかりません', 404);
+  const { title, description, opensAt, closesAt } = validatePollFields(body);
+  const current = (await env.DB.prepare(
+    `SELECT o.id, o.label, (SELECT COUNT(*) FROM ballots b WHERE b.option_id = o.id) AS voters
+       FROM options o WHERE o.poll_id = ?`
+  ).bind(id).all()).results;
+  const totalVotes = current.reduce((a, o) => a + o.voters, 0);
+  if (totalVotes > 0 && opensAt !== poll.opens_at) {
+    throw bad('投票が入っているテーマは、受付開始日時を変えられません（終了日時は変えられます）', 409);
+  }
+  const incoming = (Array.isArray(body.options) ? body.options : [])
+    .map((o) => (typeof o === 'object' && o !== null ? { id: Number(o.id) || null, label: String(o.label || '').trim() } : { id: null, label: String(o).trim() }))
+    .filter((o) => o.label);
+  if (incoming.length < 2 || incoming.length > 20) throw bad('選択肢は 2〜20 個にしてください');
+  const currentIds = new Set(current.map((o) => o.id));
+  for (const o of incoming) if (o.id && !currentIds.has(o.id)) throw bad('選択肢の指定が正しくありません');
+  const keep = new Set(incoming.filter((o) => o.id).map((o) => o.id));
+  const removed = current.filter((o) => !keep.has(o.id));
+  const blocked = removed.find((o) => o.voters > 0);
+  if (blocked) throw bad(`「${blocked.label}」には ${blocked.voters} 人が投票しているため削除できません`, 409);
+
+  const stmts = [
+    env.DB.prepare('UPDATE polls SET title = ?, description = ?, opens_at = ?, closes_at = ? WHERE id = ?')
+      .bind(title, description, opensAt, closesAt, id),
+    ...removed.map((o) => env.DB.prepare('DELETE FROM options WHERE id = ?').bind(o.id)),
+    ...incoming.map((o, i) => (o.id
+      ? env.DB.prepare('UPDATE options SET label = ?, sort = ? WHERE id = ?').bind(o.label, i, o.id)
+      : env.DB.prepare('INSERT INTO options (poll_id, label, sort) VALUES (?, ?, ?)').bind(id, o.label, i))),
+  ];
+  await env.DB.batch(stmts);
+  return json({ ok: true, id });
+}
+
+// テーマの削除。投票も一緒に消え、そのテーマで配った票・使った票もなかったことになる
+async function deletePoll(request, env, id) {
+  const poll = await env.DB.prepare('SELECT id FROM polls WHERE id = ?').bind(id).first();
+  if (!poll) return fail('投票テーマが見つかりません', 404);
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM ballots WHERE poll_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM options WHERE poll_id = ?').bind(id),
+    env.DB.prepare('DELETE FROM polls WHERE id = ?').bind(id),
+  ]);
+  return json({ ok: true });
 }
 
 // Google スプレッドシート等に読み込めるよう、投票データを CSV で書き出す（個人を特定する情報は含めない）
@@ -554,6 +628,9 @@ async function route(request, env) {
   if ((m = path.match(/^\/api\/polls\/(\d+)\/vote$/)) && method === 'POST') { needUser(); return vote(request, env, user, Number(m[1])); }
   if ((m = path.match(/^\/api\/polls\/(\d+)\/results$/)) && method === 'GET') return results(request, env, Number(m[1]));
   if (path === '/api/admin/polls' && method === 'POST') { needAdmin(); return createPoll(request, env); }
+  if (path === '/api/admin/polls' && method === 'GET') { needAdmin(); return adminListPolls(env); }
+  if ((m = path.match(/^\/api\/admin\/polls\/(\d+)$/)) && method === 'PUT') { needAdmin(); return updatePoll(request, env, Number(m[1])); }
+  if ((m = path.match(/^\/api\/admin\/polls\/(\d+)$/)) && method === 'DELETE') { needAdmin(); return deletePoll(request, env, Number(m[1])); }
   if ((m = path.match(/^\/api\/admin\/polls\/(\d+)\/export$/)) && method === 'GET') { needAdmin(); return exportCsv(request, env, Number(m[1])); }
   return fail('見つかりません', 404);
 }
