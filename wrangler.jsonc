@@ -1,0 +1,35 @@
+// みんなの声（民意を集める投票サイト）を Cloudflare Workers + D1 で公開する設定
+{
+  "name": "minnano-koe",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-10-01",
+  // election.support で公開する（ドメインが同じ Cloudflare アカウントに追加済みであること）
+  "routes": [{ "pattern": "election.support", "custom_domain": true }],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    // /api/* だけ Worker で処理し、それ以外は静的ファイルを返す
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "minnano-koe",
+      // `npx wrangler d1 create minnano-koe` で表示された ID に置き換える
+      "database_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "vars": {
+    // 持ち越せる票の上限（溜め込みすぎ防止）
+    "MAX_BALANCE": "3",
+    // SMS 送信の上限（1 つの IP から 1 時間あたり／サイト全体で 1 日あたり）
+    "SMS_LIMIT_PER_IP_HOUR": "5",
+    "SMS_LIMIT_PER_DAY": "500"
+  }
+  // 秘密の値は `npx wrangler secret put <名前>` で設定する（ここには書かない）
+  //   ADMIN_TOKEN         管理画面のパスワード
+  //   PHONE_PEPPER        電話番号を HMAC する鍵（一度決めたら変えない）
+  //   TWILIO_ACCOUNT_SID  Twilio のアカウント SID
+  //   TWILIO_AUTH_TOKEN   Twilio の Auth Token
+  //   TWILIO_VERIFY_SID   Twilio Verify のサービス SID（VA から始まる）
+}
