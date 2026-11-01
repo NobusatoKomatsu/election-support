@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- サイト（public/style.css）と同じ色 -->
+<resources>
+    <color name="bg">#F6F7F9</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="fg">#1B1F24</color>
+    <color name="muted">#5F6B7A</color>
+    <color name="line">#E2E6EB</color>
+    <color name="accent">#2456D6</color>
+    <color name="accent_text">#FFFFFF</color>
+    <color name="ok_bg">#E8F3EC</color>
+    <color name="ok_text">#1E6B3A</color>
+    <color name="err_bg">#FBEAEA</color>
+    <color name="err_text">#9B2C2C</color>
+</resources>
