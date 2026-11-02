@@ -136,3 +136,13 @@ td.m { color: var(--minus); }
   th { white-space: normal; vertical-align: bottom; }
   td:first-child { white-space: normal; }
 }
+
+/* フッター（サイトの説明・リンク） */
+.foot .about { border-top: 1px solid var(--line); padding-top: 8px; }
+.foot .about h2 { font-size: .95rem; margin: 12px 0 4px; color: var(--text); }
+.foot .links a { color: var(--muted); }
+
+/* 広告枠 */
+.ad { margin: 24px 0; text-align: center; min-height: 100px; }
+.ad::before { content: "広告"; display: block; font-size: .72rem; color: var(--muted); margin-bottom: 4px; }
+.ad:empty, .ad[hidden] { display: none; }
