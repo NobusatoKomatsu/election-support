@@ -10,6 +10,24 @@ const PENSION = { 1: '受給している', 0: '受給していない' };
 const AGE_ORDER = ['〜19歳', '20代', '30代', '40代', '50代', '60代', '70歳以上'];
 const REFRESH_MS = 5000;
 
+// Google AdSense の手動広告枠。AdSense で「広告ユニット」を作ったら、その data-ad-slot の数字をここに入れる。
+// 空のままなら手動枠は出さず、AdSense の自動広告（index.html の読み込みだけ）に任せる。
+// 投票フォームの近くには置かない（誤クリックを誘う配置は AdSense の規約違反）
+const AD_CLIENT = 'ca-pub-3726905377775362';
+const AD_SLOTS = { home: '', result: '' };
+
+function adUnit(key) {
+  const slot = AD_SLOTS[key];
+  if (!slot) return '';
+  return `<div class="ad"><ins class="adsbygoogle" style="display:block" data-ad-client="${AD_CLIENT}"
+    data-ad-slot="${slot}" data-ad-format="auto" data-full-width-responsive="true"></ins></div>`;
+}
+function fillAds() {
+  document.querySelectorAll('ins.adsbygoogle:not([data-adsbygoogle-status])').forEach(() => {
+    try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch { /* 広告ブロッカーなど */ }
+  });
+}
+
 const app = document.getElementById('app');
 const nav = document.getElementById('nav');
 let me = null; // { user, balance, max_balance, history }
@@ -106,7 +124,9 @@ async function pageHome() {
     <h1>いま受付中のテーマ</h1>
     <p class="muted">投票しなかった票は次に持ち越せます。反対したいときはマイナス票も入れられます。</p>
     ${open.length ? open.map(card).join('') : '<div class="card muted">受付中のテーマはありません。</div>'}
+    ${adUnit('home')}
     ${rest.length ? `<h2>これまでのテーマ・これからのテーマ</h2>${rest.map(card).join('')}` : ''}`;
+  fillAds();
 }
 
 function pageLogin() {
@@ -186,6 +206,7 @@ function pageRegister() {
           <input name="password" type="password" autocomplete="new-password" minlength="8" required>
         </label>
         ${profileFields()}
+        <p class="muted small" style="margin:0">登録すると、<a href="/privacy" target="_blank" rel="noopener">プライバシーポリシー</a>に同意したものとみなします。</p>
         <div id="m"></div>
         <button>作成して始める</button>
       </form>
@@ -287,8 +308,10 @@ async function pagePoll(id) {
     ${poll.description ? `<p style="white-space:pre-wrap">${esc(poll.description)}</p>` : ''}
     <div id="vote"></div>
     <h2>結果 <span class="live">リアルタイム</span></h2>
-    <div id="results" class="card"><p class="muted">読み込み中…</p></div>`;
+    <div id="results" class="card"><p class="muted">読み込み中…</p></div>
+    ${adUnit('result')}`;
   renderVote(poll, mine, balance);
+  fillAds();
   let dim = 'age_group';
   const refresh = async () => {
     try {
