@@ -1,5 +1,6 @@
 -- みんなの声 データベース定義（Cloudflare D1 / SQLite）
 -- 時刻はすべて UNIX ミリ秒
+-- このファイルは最初の形。その後の変更は migrations/ にある（公開のたびに、まだのものだけ当てる）
 
 CREATE TABLE IF NOT EXISTS users (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,

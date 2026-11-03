@@ -17,14 +17,15 @@ Cloudflare Workers（画面と API）と Cloudflare D1（データベース）�
 生まれた年（年代で集計）・性別・年収帯・年金の受給有無のみ。ログインには ID とパスワードを使い、
 氏名やメールアドレスは聞きません。
 
-## 1 人 1 アカウント（SMS 認証）
+## 1 人 1 アカウント（LINE ログイン）
 
-- 登録時に携帯電話番号（070・080・090 のみ）へ SMS で認証コードを送り、1 番号 1 アカウントに限る
-- 電話番号そのものは保存せず、秘密の鍵（`PHONE_PEPPER`）で HMAC した値だけを保存する
-- 退会しても HMAC 値は残す。同じ番号で登録し直すと持ち票と投票履歴を引き継ぐので、退会→再登録で二重投票はできない
-- パスワードやログインIDを忘れたら、SMS で本人確認して再設定できる（`/#/reset`）
-- SMS の乱用で費用がかさまないよう、送信回数を IP ごと（1 時間 5 回）とサイト全体（1 日 500 回）で制限
-- SMS の送信と照合は [Twilio Verify](https://www.twilio.com/docs/verify) を使う投票時の属性は票と一緒に記録するので、あとでプロフィールを変えても過去の集計は変わりません。
+- 新規登録は LINE ログインで行う。日本の LINE アカウントは電話番号ごとに 1 つなので、SMS 認証とほぼ同じ強さで、費用はかからない
+- LINE から受け取るのは利用者 ID（`sub`）だけ（scope は `openid` のみ）。それも `PHONE_PEPPER` で HMAC した値だけを保存する
+- 退会しても HMAC は残す。同じ LINE で登録し直すと持ち票と投票履歴を引き継ぐので、退会→再登録で二重投票はできない
+- 以前 SMS で登録した人は ID とパスワードでログインでき、マイページから LINE と連携できる（SMS でのパスワード再設定も残している）
+- 新規の SMS 登録は止めている（`SMS_REGISTER=1` で再開できる）
+- 登録・パスワードでのログイン・SMS の送信には Cloudflare Turnstile（ロボット対策）をかける
+- データベースの変更は `migrations/` に置き、公開のたびに `wrangler d1 migrations apply` でまだのものだけ当てる
 
 ## 画面
 
@@ -56,6 +57,8 @@ Twilio の Verify サービス（名前「みんなの声」）も無ければ�
    | `VOTE_ADMIN_TOKEN` | 管理画面のパスワード（長いランダム文字列） |
    | `VOTE_PHONE_PEPPER` | 電話番号を HMAC する鍵（長いランダム文字列。**一度決めたら変えない・別に控えておく**） |
    | `TWILIO_VERIFY_SID`（任意） | 既存の Verify サービスを使う場合だけ |
+   | `LINE_CHANNEL_ID` / `LINE_CHANNEL_SECRET` | LINE Developers の LINE ログインチャネルの Channel ID / Channel secret（未登録なら LINE ログインは「準備中」） |
+   | `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile のサイトキー / シークレットキー（未登録ならロボット対策なし） |
 
 4. main に取り込む（または Actions 画面から「みんなの声 を Cloudflare に公開」を手動実行）。
    公開先は `https://election.support`（`wrangler.jsonc` の `routes`）。ドメインを先に同じ Cloudflare アカウントへ追加し、ネームサーバーを切り替えておくこと
@@ -77,8 +80,9 @@ npx wrangler deploy
 ## 手元で動かす
 
 ```sh
-# SMS_DEV_MODE=1 だと SMS を送らず、認証コード 000000 で通る（本番では設定しない）
-printf 'ADMIN_TOKEN=test-admin\nPHONE_PEPPER=dev-pepper\nSMS_DEV_MODE=1\n' > .dev.vars
+# SMS_DEV_MODE=1 だと SMS を送らず、認証コード 000000 で通る。LINE_DEV_MODE=1 だと LINE に行かず架空の利用者で戻る（本番では設定しない）
+printf 'ADMIN_TOKEN=test-admin\nPHONE_PEPPER=dev-pepper\nSMS_DEV_MODE=1\nLINE_DEV_MODE=1\n' > .dev.vars
+npx wrangler d1 migrations apply minnano-koe --local
 npx wrangler d1 execute minnano-koe --local --file=schema.sql
 npx wrangler dev
 ```

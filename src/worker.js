@@ -9,9 +9,11 @@
 //   - 1 テーマにつき 1 回だけ投票でき、あとから変えられない
 //
 // 1 人 1 アカウント
-//   - 登録時に携帯電話番号を SMS で確認する（1 番号 1 アカウント）
-//   - 電話番号そのものは保存せず、秘密の鍵で HMAC した値だけを持つ
-//   - 退会しても番号の HMAC は残し、同じ番号で登録し直すと持ち票と投票履歴を引き継ぐ（二重投票の防止）
+//   - 新規登録は LINE ログインで行う（日本の LINE アカウントは電話番号ごとに 1 つなので、SMS 認証とほぼ同じ強さ）
+//   - LINE から受け取るのは利用者 ID（sub）だけ。それも秘密の鍵で HMAC した値だけを保存する
+//   - 以前 SMS で登録した人は、ID とパスワードでログインでき、マイページから LINE と連携できる
+//   - 退会しても HMAC は残し、同じ LINE（番号）で登録し直すと持ち票と投票履歴を引き継ぐ（二重投票の防止）
+//   - 登録とパスワードでのログインには Cloudflare Turnstile（ロボット対策）をかける
 
 const SESSION_DAYS = 30;
 const PBKDF2_ITERATIONS = 100000; // Workers の上限
@@ -81,6 +83,178 @@ async function phoneHash(env, e164) {
 }
 
 const devSms = (env) => env.SMS_DEV_MODE === '1';
+
+// ---------- LINE ログイン ----------
+
+const LINE_AUTHORIZE = 'https://access.line.me/oauth2/v2.1/authorize';
+const LINE_TOKEN = 'https://api.line.me/oauth2/v2.1/token';
+const LINE_VERIFY = 'https://api.line.me/oauth2/v2.1/verify';
+const lineEnabled = (env) => Boolean(env.LINE_CHANNEL_ID && env.LINE_CHANNEL_SECRET) || env.LINE_DEV_MODE === '1';
+
+async function lineHash(env, sub) {
+  // 電話番号と同じ鍵を使うが、先頭に "line:" を付けて別物として扱う
+  return phoneHash(env, `line:${sub}`);
+}
+
+function tempCookie(name, value, maxAge) {
+  return `${name}=${value}; Path=/api/line; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+}
+
+// LINE の認可画面へ送る。mode=link はログイン中の人が LINE を連携するとき
+async function lineStart(request, env) {
+  if (!lineEnabled(env)) return Response.redirect(new URL('/?line_error=disabled#/login', request.url).toString(), 302);
+  const url = new URL(request.url);
+  const mode = url.searchParams.get('mode') === 'link' ? 'link' : 'login';
+  const state = randomB64(24);
+  const nonce = randomB64(24);
+  const redirectUri = new URL('/api/line/callback', request.url).toString();
+  let target;
+  if (env.LINE_DEV_MODE === '1') {
+    // 開発用: LINE に行かず、架空の利用者 ID（?dev_sub=）で戻ってくる
+    target = `${redirectUri}?code=dev&state=${state}&dev_sub=${encodeURIComponent(url.searchParams.get('dev_sub') || 'U-dev-user')}`;
+  } else {
+    const q = new URLSearchParams({
+      response_type: 'code', client_id: env.LINE_CHANNEL_ID, redirect_uri: redirectUri,
+      state, scope: 'openid', nonce,
+    });
+    target = `${LINE_AUTHORIZE}?${q}`;
+  }
+  const headers = new Headers({ location: target, 'cache-control': 'no-store' });
+  headers.append('set-cookie', tempCookie('line_oauth', `${state}.${nonce}.${mode}`, 600));
+  return new Response(null, { status: 302, headers });
+}
+
+async function lineSubFromCode(env, request, code, nonce) {
+  if (env.LINE_DEV_MODE === '1') return new URL(request.url).searchParams.get('dev_sub') || 'U-dev-user';
+  const redirectUri = new URL('/api/line/callback', request.url).toString();
+  const tokenRes = await fetch(LINE_TOKEN, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code', code, redirect_uri: redirectUri,
+      client_id: env.LINE_CHANNEL_ID, client_secret: env.LINE_CHANNEL_SECRET,
+    }),
+  });
+  const token = await tokenRes.json().catch(() => ({}));
+  if (!tokenRes.ok || !token.id_token) {
+    console.error('LINE token failed', tokenRes.status, token.error, token.error_description);
+    return null;
+  }
+  // ID トークンの署名・有効期限・nonce は LINE の検証 API に確かめてもらう
+  const verifyRes = await fetch(LINE_VERIFY, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ id_token: token.id_token, client_id: env.LINE_CHANNEL_ID, nonce }),
+  });
+  const claims = await verifyRes.json().catch(() => ({}));
+  if (!verifyRes.ok || !claims.sub) {
+    console.error('LINE verify failed', verifyRes.status, claims.error, claims.error_description);
+    return null;
+  }
+  return claims.sub;
+}
+
+// LINE から戻ってきたところ。登録済みならログイン、未登録ならプロフィール入力へ
+async function lineCallback(request, env, user) {
+  const url = new URL(request.url);
+  // 結果は ?line_error=… / ?line_ok=… で画面に伝える
+  const back = (hash, param) => {
+    const to = new URL(`/${param ? `?${param}` : ''}#/${hash}`, request.url).toString();
+    const headers = new Headers({ location: to, 'cache-control': 'no-store' });
+    headers.append('set-cookie', tempCookie('line_oauth', '', 0));
+    return { headers, res: () => new Response(null, { status: 302, headers }) };
+  };
+  const [state, nonce, mode] = (getCookie(request, 'line_oauth') || '').split('.');
+  if (url.searchParams.get('error')) return back('login', 'line_error=cancel').res();
+  if (!state || !safeEqual(state, url.searchParams.get('state') || '')) return back('login', 'line_error=state').res();
+  const sub = await lineSubFromCode(env, request, url.searchParams.get('code') || '', nonce);
+  if (!sub) return back('login', 'line_error=verify').res();
+  const hash = await lineHash(env, sub);
+  const owner = await env.DB.prepare('SELECT id, deleted_at FROM users WHERE line_hash = ?').bind(hash).first();
+
+  if (mode === 'link') {
+    if (!user) return back('login', 'line_error=login').res();
+    if (owner && owner.id !== user.id) return back('me', 'line_error=linked_other').res();
+    await env.DB.prepare('UPDATE users SET line_hash = ? WHERE id = ?').bind(hash, user.id).run();
+    return back('me', 'line_ok=linked').res();
+  }
+
+  if (owner && !owner.deleted_at) {
+    const r = back('');
+    r.headers.append('set-cookie', await createSession(env, owner.id));
+    return r.res();
+  }
+  // 新規（または退会後の再登録）: プロフィール入力を待つ
+  const token = randomB64(32);
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM line_pending WHERE expires_at < ?').bind(Date.now()),
+    env.DB.prepare('INSERT INTO line_pending (token_hash, line_hash, expires_at) VALUES (?, ?, ?)')
+      .bind(await sha256(token), hash, Date.now() + 30 * 60000),
+  ]);
+  const r = back('line-register');
+  r.headers.append('set-cookie', `line_pending=${token}; Path=/api; HttpOnly; Secure; SameSite=Lax; Max-Age=1800`);
+  return r.res();
+}
+
+// LINE で確かめた人のプロフィールを受け取り、アカウントを作る
+async function lineRegister(request, env) {
+  const body = await readBody(request);
+  await checkTurnstile(request, env, body.turnstile);
+  const profile = validateProfile(body);
+  const token = getCookie(request, 'line_pending');
+  const pending = token && await env.DB.prepare('SELECT line_hash FROM line_pending WHERE token_hash = ? AND expires_at > ?')
+    .bind(await sha256(token), Date.now()).first();
+  if (!pending) throw bad('時間が経ちすぎました。もう一度「LINE で登録」から始めてください', 410);
+  const owner = await env.DB.prepare('SELECT id, deleted_at FROM users WHERE line_hash = ?').bind(pending.line_hash).first();
+  if (owner && !owner.deleted_at) throw bad('この LINE アカウントは登録済みです。ログインしてください', 409);
+  let userId;
+  if (owner) {
+    await env.DB.prepare(
+      `UPDATE users SET login_id = ?, birth_year = ?, gender = ?, income = ?, pension = ?, deleted_at = NULL WHERE id = ?`
+    ).bind(`line-${owner.id}`, profile.birth_year, profile.gender, profile.income, profile.pension, owner.id).run();
+    userId = owner.id;
+  } else {
+    // ログイン ID とパスワードは使わない（LINE でログインする）。表示用の ID だけ付ける
+    const res = await env.DB.prepare(
+      `INSERT INTO users (login_id, pw_hash, pw_salt, phone_hash, line_hash, birth_year, gender, income, pension, created_at)
+       VALUES (?, '', '', ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(`line-${randomB64(9)}`, `none:${pending.line_hash}`, pending.line_hash, profile.birth_year, profile.gender, profile.income, profile.pension, Date.now()).run();
+    userId = res.meta.last_row_id;
+    await env.DB.prepare('UPDATE users SET login_id = ? WHERE id = ?').bind(`line-${userId}`, userId).run();
+  }
+  await env.DB.prepare('DELETE FROM line_pending WHERE token_hash = ?').bind(await sha256(token)).run();
+  const headers = new Headers({ 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  headers.append('set-cookie', await createSession(env, userId));
+  headers.append('set-cookie', 'line_pending=; Path=/api; HttpOnly; Secure; SameSite=Lax; Max-Age=0');
+  return new Response(JSON.stringify({ ok: true, restored: Boolean(owner) }), { status: 201, headers });
+}
+
+// ---------- Cloudflare Turnstile（ロボット対策） ----------
+
+async function checkTurnstile(request, env, token) {
+  if (!env.TURNSTILE_SECRET_KEY) return; // 未設定（開発環境など）なら確認しない
+  if (!token) throw bad('ロボットでないことの確認が終わっていません。少し待ってからもう一度押してください');
+  const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      secret: env.TURNSTILE_SECRET_KEY,
+      response: String(token),
+      remoteip: request.headers.get('cf-connecting-ip') || '',
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!data.success) throw bad('ロボットでないことを確認できませんでした。ページを読み込み直してからお試しください');
+}
+
+// 画面側で使う公開設定
+function siteConfig(env) {
+  return json({
+    line: lineEnabled(env),
+    turnstile_site_key: env.TURNSTILE_SITE_KEY || null,
+    sms_reset: Boolean(env.TWILIO_ACCOUNT_SID) || devSms(env),
+  });
+}
 
 async function twilio(env, path, params) {
   if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !env.TWILIO_VERIFY_SID) {
@@ -245,6 +419,8 @@ async function balanceOf(env, user, now = Date.now()) {
 // 手順 1: 認証コードを送る（purpose = register / reset）
 async function smsStart(request, env) {
   const body = await readBody(request);
+  if (body.purpose !== 'reset' && env.SMS_REGISTER !== '1') throw bad('新規登録は「LINE で登録」からお願いします', 410);
+  await checkTurnstile(request, env, body.turnstile);
   const e164 = normalizePhone(body.phone);
   const hash = await phoneHash(env, e164);
   const owner = await env.DB.prepare('SELECT deleted_at FROM users WHERE phone_hash = ?').bind(hash).first();
@@ -274,6 +450,7 @@ async function newPassword(password) {
 // 手順 2: 認証コードと一緒にアカウントを作る
 async function register(request, env) {
   const body = await readBody(request);
+  if (env.SMS_REGISTER !== '1') throw bad('新規登録は「LINE で登録」からお願いします', 410);
   const { loginId, password } = validateCredentials(body);
   const profile = validateProfile(body);
   const e164 = normalizePhone(body.phone);
@@ -324,6 +501,7 @@ async function resetPassword(request, env) {
 
 async function login(request, env) {
   const body = await readBody(request);
+  await checkTurnstile(request, env, body.turnstile);
   const user = await env.DB.prepare('SELECT * FROM users WHERE login_id = ? AND deleted_at IS NULL').bind(String(body.login_id || '').trim()).first();
   // ID が無い場合も同じだけ計算して、応答時間で ID の有無が分からないようにする
   const hash = await hashPassword(String(body.password || ''), user ? user.pw_salt : 'AAAAAAAAAAAAAAAAAAAAAA==');
@@ -346,7 +524,7 @@ async function me(request, env, user) {
       WHERE b.user_id = ? ORDER BY b.created_at DESC`
   ).bind(user.id).all();
   return json({
-    user: publicUser(user),
+    user: { ...publicUser(user), line_linked: Boolean(user.line_hash), has_password: Boolean(user.pw_hash) },
     balance: await balanceOf(env, user),
     max_balance: Number(env.MAX_BALANCE || 3),
     history: history.results,
@@ -361,7 +539,7 @@ async function updateProfile(request, env, user) {
 }
 
 async function deleteAccount(request, env, user) {
-  // ログインID・パスワード・プロフィールは消す。電話番号の HMAC と投票済みの票は残す
+  // ログインID・パスワード・プロフィールは消す。電話番号・LINE の HMAC と投票済みの票は残す
   // （票を消すと結果が後から変わり、番号を消すと再登録で同じテーマに二重投票できてしまうため）
   await env.DB.batch([
     env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(user.id),
@@ -615,6 +793,10 @@ async function route(request, env) {
   };
   let m;
 
+  if (path === '/api/config' && method === 'GET') return siteConfig(env);
+  if (path === '/api/line/start' && method === 'GET') return lineStart(request, env);
+  if (path === '/api/line/callback' && method === 'GET') return lineCallback(request, env, user);
+  if (path === '/api/line/register' && method === 'POST') return lineRegister(request, env);
   if (path === '/api/sms/start' && method === 'POST') return smsStart(request, env);
   if (path === '/api/register' && method === 'POST') return register(request, env);
   if (path === '/api/reset-password' && method === 'POST') return resetPassword(request, env);
