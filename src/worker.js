@@ -841,6 +841,7 @@ async function route(request, env) {
 // ---------- SNS でシェアするときのページ ----------
 // X・LINE・Facebook などは、リンクを貼るとこのページのタイトルや画像（OGP）を読んでカードにする。
 // 人が開いたときは、すぐテーマのページ（/#/poll/<番号>）へ移る。
+// 移動は JavaScript だけで行う（meta refresh にすると、Facebook などがそれに従ってトップの OGP を読んでしまう）。
 
 function escHtml(v) {
   return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -880,7 +881,6 @@ async function sharePage(request, env, id) {
 <meta name="twitter:image" content="${origin}/og-image.png">
 <meta name="twitter:image:alt" content="みんなの声 — 民意をリアルタイムで見える化する投票サイト">
 <link rel="canonical" href="${origin}/p/${id}">
-<meta http-equiv="refresh" content="0; url=${escHtml(target)}">
 </head><body>
 <p><a href="${escHtml(target)}">${escHtml(poll.title)}</a> を開いています…</p>
 <script>location.replace(${JSON.stringify(target)});</script>
