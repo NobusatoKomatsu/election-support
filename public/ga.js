@@ -1,21 +1,23 @@
-// Google アナリティクス（GA4）。GA_ID を空にすると何もしない。
-// このサイトは #/poll/1 のような「#」でページを切り替えるので、切り替えのたびに trackPage() で 1 ページとして数える。
+// Google アナリティクス（Google タグ GTM-NR5QLNCN）。TAG_ID を空にすると何もしない。
+// 最初に開いたページは Google タグが自動で数える。
+// このサイトは #/poll/1 のような「#」で画面を切り替えるので、切り替えのたびに trackPage() で
+// /poll/1 のようなパスの page_view を送る（そのままだと、どの画面もトップとして数えられるため）。
 (function () {
   'use strict';
-  const GA_ID = '';
+  const TAG_ID = 'GTM-NR5QLNCN';
   window.trackPage = function () {};
-  if (!GA_ID) return;
+  if (!TAG_ID) return;
   window.dataLayer = window.dataLayer || [];
   window.gtag = function () { window.dataLayer.push(arguments); };
   window.gtag('js', new Date());
-  // 最初の表示も trackPage() で数えるので、自動の page_view は止める
-  window.gtag('config', GA_ID, { send_page_view: false });
   const sc = document.createElement('script');
   sc.async = true;
-  sc.src = `https://www.googletagmanager.com/gtag/js?id=${GA_ID}`;
+  sc.src = `https://www.googletagmanager.com/gtm.js?id=${TAG_ID}`;
   document.head.appendChild(sc);
-  // path は「/poll/1」のような形で渡す（# を外して、レポートで別のページとして見えるようにする）
+
+  let first = true;
   window.trackPage = function (path, title) {
+    if (first) { first = false; return; } // 最初の表示は Google タグが数える
     window.gtag('event', 'page_view', {
       page_location: location.origin + path,
       page_path: path,
