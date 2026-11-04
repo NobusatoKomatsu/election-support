@@ -21,6 +21,10 @@ jobs:
       TWILIO_VERIFY_SID: ${{ secrets.TWILIO_VERIFY_SID }}
       ADMIN_TOKEN: ${{ secrets.VOTE_ADMIN_TOKEN }}
       PHONE_PEPPER: ${{ secrets.VOTE_PHONE_PEPPER }}
+      LINE_CHANNEL_ID: ${{ secrets.LINE_CHANNEL_ID }}
+      LINE_CHANNEL_SECRET: ${{ secrets.LINE_CHANNEL_SECRET }}
+      TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY }}
+      TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
       WRANGLER: npx --yes wrangler@4.156.0
     steps:
       - uses: actions/checkout@v4
@@ -69,13 +73,21 @@ jobs:
       - name: テーブルを作る（すでにあれば何もしない）
         run: $WRANGLER d1 execute minnano-koe --remote --file=schema.sql
 
+      - name: データベースの変更を当てる（migrations/ のうち、まだのものだけ）
+        run: $WRANGLER d1 migrations apply minnano-koe --remote
+
       - name: 公開
         run: $WRANGLER deploy
 
       - name: 秘密の値を Worker に登録
         run: |
+          # LINE と Turnstile は登録されているものだけ渡す（未登録なら、その機能は「準備中」になる）
           jq -n --arg a "$ADMIN_TOKEN" --arg p "$PHONE_PEPPER" --arg s "$TWILIO_ACCOUNT_SID" \
                 --arg t "$TWILIO_AUTH_TOKEN" --arg v "$TWILIO_VERIFY_SID" \
-                '{ADMIN_TOKEN:$a, PHONE_PEPPER:$p, TWILIO_ACCOUNT_SID:$s, TWILIO_AUTH_TOKEN:$t, TWILIO_VERIFY_SID:$v}' > "$RUNNER_TEMP/secrets.json"
+                --arg li "$LINE_CHANNEL_ID" --arg ls "$LINE_CHANNEL_SECRET" \
+                --arg tk "$TURNSTILE_SITE_KEY" --arg ts "$TURNSTILE_SECRET_KEY" \
+                '{ADMIN_TOKEN:$a, PHONE_PEPPER:$p, TWILIO_ACCOUNT_SID:$s, TWILIO_AUTH_TOKEN:$t, TWILIO_VERIFY_SID:$v,
+                  LINE_CHANNEL_ID:$li, LINE_CHANNEL_SECRET:$ls, TURNSTILE_SITE_KEY:$tk, TURNSTILE_SECRET_KEY:$ts}
+                 | with_entries(select(.value != ""))' > "$RUNNER_TEMP/secrets.json"
           $WRANGLER secret bulk "$RUNNER_TEMP/secrets.json"
           rm -f "$RUNNER_TEMP/secrets.json"

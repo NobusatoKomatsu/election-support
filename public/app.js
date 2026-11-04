@@ -32,6 +32,52 @@ const app = document.getElementById('app');
 const nav = document.getElementById('nav');
 let me = null; // { user, balance, max_balance, history }
 let timer = null;
+let config = { line: false, turnstile_site_key: null, sms_reset: false };
+let flash = null; // 次の画面の上に出すお知らせ { text, kind }
+
+// ---------- Cloudflare Turnstile（ロボット対策） ----------
+
+let turnstileLoading = null;
+function loadTurnstile() {
+  if (!config.turnstile_site_key) return Promise.resolve(null);
+  turnstileLoading ??= new Promise((resolve) => {
+    window.onTurnstileLoad = () => resolve(window.turnstile);
+    const sc = document.createElement('script');
+    sc.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onTurnstileLoad';
+    sc.async = true;
+    sc.onerror = () => resolve(null);
+    document.head.appendChild(sc);
+  });
+  return turnstileLoading;
+}
+// フォームの中の <div class="ts"> に確認欄を出す。token() で送信用の値を取り出す
+function turnstileBox(el) {
+  let id = null;
+  let ts = null;
+  if (el) loadTurnstile().then((t) => {
+    if (!t || !el.isConnected) return;
+    ts = t;
+    id = t.render(el, { sitekey: config.turnstile_site_key, language: 'ja', theme: 'auto' });
+  });
+  return {
+    token: () => (ts && id !== null ? ts.getResponse(id) || '' : ''),
+    reset: () => { if (ts && id !== null) ts.reset(id); },
+  };
+}
+
+const LINE_MESSAGES = {
+  cancel: 'LINE でのログインがキャンセルされました。',
+  state: '時間が経ちすぎたか、別のタブで操作されたため確認できませんでした。もう一度お試しください。',
+  verify: 'LINE で本人を確かめられませんでした。もう一度お試しください。',
+  login: 'ログインしてから LINE と連携してください。',
+  linked_other: 'この LINE アカウントは、別のアカウントで使われています。',
+  disabled: 'LINE ログインは準備中です。',
+};
+function lineButton(text, href = '/api/line/start') {
+  return config.line
+    ? `<a class="btn btn-line" href="${href}">${esc(text)}</a>`
+    : '<div class="msg err">LINE ログインは準備中です。しばらくお待ちください。</div>';
+}
 
 // ---------- 小道具 ----------
 
@@ -132,27 +178,33 @@ async function pageHome() {
 function pageLogin() {
   app.innerHTML = `
     <h1>ログイン</h1>
-    <div class="card">
-      <form id="f">
+    <div class="card" style="display:grid;gap:10px">
+      ${lineButton('LINE でログイン')}
+      <p class="muted small" style="margin:0">LINE で登録した方はこちら。初めての方も、このボタンから登録できます。</p>
+    </div>
+    <details class="card">
+      <summary>以前に ID とパスワードで登録した方</summary>
+      <form id="f" style="margin-top:12px">
         <label>ログインID <input name="login_id" autocomplete="username" required></label>
         <label>パスワード <input name="password" type="password" autocomplete="current-password" required></label>
+        <div class="ts"></div>
         <div id="m"></div>
         <button>ログイン</button>
+        ${config.sms_reset ? '<p class="small" style="margin:0"><a href="#/reset">パスワード・ログインIDを忘れた</a></p>' : ''}
       </form>
-    </div>
-    <p class="small"><a href="#/reset">パスワード・ログインIDを忘れた</a>　/　アカウントがない方は <a href="#/register">アカウント作成</a></p>`;
+    </details>`;
   const f = document.getElementById('f');
+  const ts = turnstileBox(f.querySelector('.ts'));
   f.onsubmit = async (e) => {
     e.preventDefault();
     try {
-      await api('/login', { method: 'POST', body: formData(f) });
+      await api('/login', { method: 'POST', body: { ...formData(f), turnstile: ts.token() } });
       await loadMe();
       location.hash = '#/';
-    } catch (err) { message(document.getElementById('m'), err.message); }
+    } catch (err) { message(document.getElementById('m'), err.message); ts.reset(); }
   };
 }
 
-// 携帯番号を入れて「認証コードを送る」→ 届いたコードを入れる、の部品
 function smsFields() {
   return `
     <fieldset>
@@ -170,13 +222,13 @@ function smsFields() {
     </fieldset>`;
 }
 
-function wireSms(form, purpose) {
+function wireSms(form, purpose, ts) {
   const btn = form.querySelector('#send');
   const box = form.querySelector('#sm');
   btn.onclick = async () => {
     btn.disabled = true;
     try {
-      await api('/sms/start', { method: 'POST', body: { phone: form.phone.value, purpose } });
+      await api('/sms/start', { method: 'POST', body: { phone: form.phone.value, purpose, turnstile: ts?.token() } });
       message(box, 'SMS を送りました。届いたコードを入力してください', 'ok');
       form.code.focus();
       let wait = 60;
@@ -187,6 +239,7 @@ function wireSms(form, purpose) {
     } catch (err) {
       message(box, err.message);
       btn.disabled = false;
+      ts?.reset();
     }
   };
 }
@@ -194,34 +247,48 @@ function wireSms(form, purpose) {
 function pageRegister() {
   app.innerHTML = `
     <h1>アカウント作成</h1>
-    <p class="muted">集計に使うのは <strong>年代・性別・年収・年金の受給状況</strong> だけです。氏名・メールアドレス・住所は聞きません。
-      携帯電話番号は「1 人 1 アカウント」の確認だけに使い、番号そのものは保存しません。</p>
-    <div class="card">
-      <form id="f">
-        ${smsFields()}
-        <label>ログインID <span class="hint">半角英数字と _ . - で 3〜32 文字</span>
-          <input name="login_id" autocomplete="username" required pattern="[A-Za-z0-9_.\\-]{3,32}">
-        </label>
-        <label>パスワード <span class="hint">8 文字以上</span>
-          <input name="password" type="password" autocomplete="new-password" minlength="8" required>
-        </label>
-        ${profileFields()}
-        <p class="muted small" style="margin:0">登録すると、<a href="/privacy" target="_blank" rel="noopener">プライバシーポリシー</a>に同意したものとみなします。</p>
-        <div id="m"></div>
-        <button>作成して始める</button>
-      </form>
+    <p>LINE で本人を確かめてから、年代などのプロフィールを入力します。</p>
+    <div class="card" style="display:grid;gap:12px">
+      ${lineButton('LINE で登録')}
+      <ul class="muted small" style="margin:0;padding-left:1.2em">
+        <li>LINE から受け取るのは、アカウントを見分けるための ID だけです。名前・プロフィール画像・メールアドレス・電話番号・トーク・友だちは受け取りません。</li>
+        <li>1 つの LINE アカウントにつき 1 アカウントです。</li>
+        <li>集計に使うのは <strong>年代・性別・年収・年金の受給状況</strong> だけです。</li>
+        <li>友だち追加やメッセージの送信はしません。</li>
+      </ul>
     </div>
     <p class="small">すでにアカウントがある方は <a href="#/login">ログイン</a></p>`;
+}
+
+// LINE で確かめたあとのプロフィール入力
+function pageLineRegister() {
+  app.innerHTML = `
+    <h1>プロフィールの入力</h1>
+    <p class="muted">LINE での確認ができました。最後に、集計に使う 4 つの項目を入力してください。</p>
+    <div class="card">
+      <form id="f">
+        ${profileFields()}
+        <div class="ts"></div>
+        <p class="muted small" style="margin:0">登録すると、<a href="/privacy" target="_blank" rel="noopener">プライバシーポリシー</a>に同意したものとみなします。</p>
+        <div id="m"></div>
+        <button>登録して始める</button>
+      </form>
+    </div>`;
   const f = document.getElementById('f');
-  wireSms(f, 'register');
+  const ts = turnstileBox(f.querySelector('.ts'));
   f.onsubmit = async (e) => {
     e.preventDefault();
     try {
-      const r = await api('/register', { method: 'POST', body: formData(f) });
+      const r = await api('/line/register', { method: 'POST', body: { ...formData(f), turnstile: ts.token() } });
       await loadMe();
-      if (r.restored) alert('以前のアカウントの持ち票と投票履歴を引き継ぎました。');
+      if (r.restored) flash = { text: '以前のアカウントの持ち票と投票履歴を引き継ぎました。', kind: 'ok' };
       location.hash = '#/';
-    } catch (err) { message(document.getElementById('m'), err.message); }
+    } catch (err) {
+      const box = document.getElementById('m');
+      message(box, err.message);
+      if (/もう一度「LINE で登録」/.test(err.message)) box.insertAdjacentHTML('beforeend', '<p class="small"><a href="#/register">登録をやり直す</a></p>');
+      ts.reset();
+    }
   };
 }
 
@@ -232,6 +299,7 @@ function pageReset() {
     <div class="card">
       <form id="f">
         ${smsFields()}
+        <div class="ts"></div>
         <label>新しいパスワード <span class="hint">8 文字以上</span>
           <input name="password" type="password" autocomplete="new-password" minlength="8" required>
         </label>
@@ -240,13 +308,14 @@ function pageReset() {
       </form>
     </div>`;
   const f = document.getElementById('f');
-  wireSms(f, 'reset');
+  const ts = turnstileBox(f.querySelector('.ts'));
+  wireSms(f, 'reset', ts);
   f.onsubmit = async (e) => {
     e.preventDefault();
     try {
       const r = await api('/reset-password', { method: 'POST', body: formData(f) });
       await loadMe();
-      alert(`パスワードを再設定しました。ログインIDは「${r.login_id}」です。`);
+      flash = { text: `パスワードを再設定しました。ログインIDは「${r.login_id}」です。`, kind: 'ok' };
       location.hash = '#/';
     } catch (err) { message(document.getElementById('m'), err.message); }
   };
@@ -277,10 +346,16 @@ async function pageMe() {
         <button>保存</button>
       </form>
     </div>
+    <h2>LINE 連携</h2>
+    <div class="card">
+      ${u.line_linked
+        ? '<p style="margin:0">LINE と連携しています。LINE でログインできます。</p>'
+        : `<p class="small" style="margin-top:0">LINE と連携すると、次から LINE でログインできます（パスワードは不要になります）。</p>${lineButton('LINE と連携する', '/api/line/start?mode=link')}`}
+    </div>
     <h2>退会</h2>
     <div class="card">
-      <p class="small" style="margin-top:0">ログインID・パスワード・プロフィールを削除します。投票済みの票は集計に残ります。
-        二重投票を防ぐため、同じ番号で登録し直すと持ち票と投票履歴を引き継ぎます。</p>
+      <p class="small" style="margin-top:0">プロフィールとログインの情報を削除します。投票済みの票は集計に残ります。
+        二重投票を防ぐため、同じ LINE アカウント（または電話番号）で登録し直すと、持ち票と投票履歴を引き継ぎます。</p>
       <button class="danger" id="del">アカウントを削除</button>
     </div>`;
   const f = document.getElementById('f');
@@ -581,6 +656,7 @@ async function router() {
   try {
     if (parts[0] === 'login') pageLogin();
     else if (parts[0] === 'register') pageRegister();
+    else if (parts[0] === 'line-register') pageLineRegister();
     else if (parts[0] === 'reset') pageReset();
     else if (parts[0] === 'me') await pageMe();
     else if (parts[0] === 'admin') pageAdmin();
@@ -589,8 +665,26 @@ async function router() {
   } catch (err) {
     app.innerHTML = `<div class="msg err">${esc(err.message)}</div><p><a href="#/">トップへ戻る</a></p>`;
   }
+  if (flash) {
+    app.insertAdjacentHTML('afterbegin', `<div class="msg ${flash.kind}">${esc(flash.text)}</div>`);
+    flash = null;
+  }
   window.scrollTo(0, 0);
 }
 
-window.addEventListener('hashchange', router);
-loadMe().then(router);
+// LINE から戻ってきたときの結果（?line_error=… / ?line_ok=…）を読み取り、アドレスからは消す
+function readLineResult() {
+  const q = new URLSearchParams(location.search);
+  if (q.get('line_error')) flash = { text: LINE_MESSAGES[q.get('line_error')] || 'LINE でのログインに失敗しました。', kind: 'err' };
+  else if (q.get('line_ok') === 'linked') flash = { text: 'LINE と連携しました。次からは LINE でログインできます。', kind: 'ok' };
+  if (location.search) history.replaceState(null, '', location.pathname + location.hash);
+}
+
+async function start() {
+  readLineResult();
+  config = await api('/config').catch(() => config);
+  await loadMe();
+  window.addEventListener('hashchange', router);
+  router();
+}
+start();

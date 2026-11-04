@@ -146,3 +146,9 @@ td.m { color: var(--minus); }
 .ad { margin: 24px 0; text-align: center; min-height: 100px; }
 .ad::before { content: "広告"; display: block; font-size: .72rem; color: var(--muted); margin-bottom: 4px; }
 .ad:empty, .ad[hidden] { display: none; }
+
+/* LINE ログインのボタン（LINE のブランドカラー） */
+.btn-line { background: #06C755; color: #fff; display: block; font-size: 1.05rem; padding: 13px 18px; }
+.btn-line:hover { background: #05b34c; }
+details.card summary { cursor: pointer; font-weight: 600; }
+.ts:empty { display: none; }
