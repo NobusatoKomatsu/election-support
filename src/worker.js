@@ -15,6 +15,9 @@
 //   - 退会しても HMAC は残し、同じ LINE（番号）で登録し直すと持ち票と投票履歴を引き継ぐ（二重投票の防止）
 //   - 登録とパスワードでのログインには Cloudflare Turnstile（ロボット対策）をかける
 
+import '../public/source.js'; // どこから来たかの判定（画面と共通）
+const { SOURCE_LABELS, detectSource, sourceCookie } = globalThis.SourceDetect;
+
 const SESSION_DAYS = 30;
 const PBKDF2_ITERATIONS = 100000; // Workers の上限
 
@@ -594,6 +597,12 @@ async function showPoll(request, env, user, id) {
   return json({ poll, my_ballot: myBallot, balance });
 }
 
+// 投票した人がどこから来たか（cookie「src」。来たときに判定して覚えておく）
+function voteSource(request) {
+  const src = getCookie(request, 'src');
+  return src && Object.hasOwn(SOURCE_LABELS, src) && src !== 'unknown' ? src : 'direct';
+}
+
 async function vote(request, env, user, id) {
   const body = await readBody(request);
   const poll = await getPoll(env, id);
@@ -610,9 +619,9 @@ async function vote(request, env, user, id) {
   if (Math.abs(weight) > balance) return fail(`持ち票は ${balance} 票です`, 409);
   try {
     await env.DB.prepare(
-      `INSERT INTO ballots (poll_id, user_id, option_id, weight, created_at, age_group, gender, income, pension)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, user.id, option.id, weight, now, ageGroup(user.birth_year, now), user.gender, user.income, user.pension).run();
+      `INSERT INTO ballots (poll_id, user_id, option_id, weight, created_at, age_group, gender, income, pension, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, user.id, option.id, weight, now, ageGroup(user.birth_year, now), user.gender, user.income, user.pension, voteSource(request)).run();
   } catch (e) {
     if (String(e).includes('UNIQUE')) return fail('このテーマにはもう投票しています', 409);
     throw e;
@@ -622,13 +631,13 @@ async function vote(request, env, user, id) {
 
 // 集計結果。属性別とかけ合わせは、人数が少ない区分（MIN_GROUP_SIZE 人未満、初期値 5）を出さない
 // （「70歳以上・年収1,000万円以上・年金なし＝1人」のような区分から、誰がどう投票したか分かってしまうため）
-const DIM_KEYS = ['age_group', 'gender', 'income', 'pension'];
+const DIM_KEYS = ['age_group', 'gender', 'income', 'pension', 'source'];
 
 async function results(request, env, id) {
   const poll = await getPoll(env, id);
   if (!poll) return fail('投票テーマが見つかりません', 404);
   const rows = (await env.DB.prepare(
-    'SELECT option_id, weight, age_group, gender, income, pension FROM ballots WHERE poll_id = ?'
+    'SELECT option_id, weight, age_group, gender, income, pension, source FROM ballots WHERE poll_id = ?'
   ).bind(id).all()).results;
   const minGroup = Math.max(1, Number(env.MIN_GROUP_SIZE || 5));
 
@@ -671,7 +680,7 @@ async function results(request, env, id) {
     breakdown,
     cross,
     min_group: minGroup,
-    labels: { gender: GENDER, income: INCOME, pension: PENSION },
+    labels: { gender: GENDER, income: INCOME, pension: PENSION, source: SOURCE_LABELS },
     updated_at: Date.now(),
   });
 }
@@ -779,15 +788,15 @@ async function deletePoll(request, env, id) {
 // Google スプレッドシート等に読み込めるよう、投票データを CSV で書き出す（個人を特定する情報は含めない）
 async function exportCsv(request, env, id) {
   const rows = (await env.DB.prepare(
-    `SELECT b.created_at, o.label, b.weight, b.age_group, b.gender, b.income, b.pension
+    `SELECT b.created_at, o.label, b.weight, b.age_group, b.gender, b.income, b.pension, b.source
        FROM ballots b JOIN options o ON o.id = b.option_id WHERE b.poll_id = ? ORDER BY b.created_at`
   ).bind(id).all()).results;
   const esc = (v) => `"${String(v).replace(/"/g, '""')}"`;
-  const lines = [['投票日時', '選択肢', '票数', '年代', '性別', '年収', '年金'].map(esc).join(',')];
+  const lines = [['投票日時', '選択肢', '票数', '年代', '性別', '年収', '年金', '経由'].map(esc).join(',')];
   for (const r of rows) {
     lines.push([
       new Date(r.created_at).toISOString(), r.label, r.weight, r.age_group,
-      GENDER[r.gender] || r.gender, INCOME[r.income] || r.income, PENSION[r.pension],
+      GENDER[r.gender] || r.gender, INCOME[r.income] || r.income, PENSION[r.pension], SOURCE_LABELS[r.source] || r.source,
     ].map(esc).join(','));
   }
   return new Response('﻿' + lines.join('\r\n'), {
@@ -905,7 +914,17 @@ async function sharePage(request, env, id) {
 <p><a href="${escHtml(target)}">${escHtml(poll.title)}</a> を開いています…</p>
 <script>location.replace(${JSON.stringify(target)});</script>
 </body></html>`;
-  return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=300' } });
+  // SNS から来た人なら、その経路を覚えておく（投票したときに票と一緒に記録する）
+  const url = new URL(request.url);
+  const src = detectSource({
+    param: url.searchParams.get('s') || url.searchParams.get('utm_source'),
+    userAgent: request.headers.get('user-agent'),
+    referrer: request.headers.get('referer'),
+    ownHost: url.hostname,
+  });
+  const headers = new Headers({ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, max-age=300', vary: 'User-Agent, Referer' });
+  if (src) headers.append('set-cookie', sourceCookie(src));
+  return new Response(html, { headers });
 }
 
 export default {

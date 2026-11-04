@@ -460,14 +460,14 @@ function renderVote(poll, mine, balance) {
   };
 }
 
-const DIMS = { age_group: '年代', gender: '性別', income: '年収', pension: '年金' };
+const DIMS = { age_group: '年代', gender: '性別', income: '年収', pension: '年金', source: '経由' };
 
 function groupOrder(dim, keys) {
-  const order = { age_group: AGE_ORDER, gender: Object.keys(GENDER), income: Object.keys(INCOME), pension: ['1', '0'] }[dim];
+  const order = { age_group: AGE_ORDER, gender: Object.keys(GENDER), income: Object.keys(INCOME), pension: ['1', '0'], source: Object.keys(SOURCE_LABELS) }[dim];
   return keys.sort((a, b) => order.indexOf(a) - order.indexOf(b));
 }
 function groupLabel(dim, key) {
-  return ({ gender: GENDER, income: INCOME, pension: PENSION }[dim] || {})[key] ?? key;
+  return ({ gender: GENDER, income: INCOME, pension: PENSION, source: SOURCE_LABELS }[dim] || {})[key] ?? key;
 }
 
 const pct = (n, d) => (d ? Math.round((n / d) * 100) : 0);
@@ -770,10 +770,29 @@ function readLineResult() {
     flash = { text: `${LINE_MESSAGES[q.get('line_error')] || 'LINE でのログインに失敗しました。'}${hint ? `\n${hint}` : ''}${detail ? `（理由：${detail}）` : ''}`, kind: 'err' };
   }
   else if (q.get('line_ok') === 'linked') flash = { text: 'LINE と連携しました。次からは LINE でログインできます。', kind: 'ok' };
-  if (location.search) history.replaceState(null, '', location.pathname + location.hash);
+  // LINE の結果だけ消す（?utm_source= などは Google アナリティクスが読むので残す）
+  if (q.has('line_error') || q.has('line_ok') || q.has('detail')) {
+    ['line_error', 'line_ok', 'detail'].forEach((k) => q.delete(k));
+    history.replaceState(null, '', location.pathname + (q.toString() ? `?${q}` : '') + location.hash);
+  }
+}
+
+// どこから来たか（X・Facebook・Instagram・LINE など）を判定して覚えておく。投票したときに票と一緒に記録される
+function rememberSource() {
+  try {
+    const q = new URLSearchParams(location.search);
+    const src = detectSource({
+      param: q.get('s') || q.get('utm_source'),
+      userAgent: navigator.userAgent,
+      referrer: document.referrer,
+      ownHost: location.hostname,
+    });
+    if (src) document.cookie = sourceCookie(src);
+  } catch { /* 判定できなくても投票はできる */ }
 }
 
 async function start() {
+  rememberSource();
   readLineResult();
   config = await api('/config').catch(() => config);
   await loadMe();
