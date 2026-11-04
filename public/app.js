@@ -752,6 +752,11 @@ async function router() {
     app.insertAdjacentHTML('afterbegin', `<div class="msg ${flash.kind}">${esc(flash.text)}</div>`);
     flash = null;
   }
+  // Google アナリティクス: 「#/poll/1」を「/poll/1」として 1 ページ数える（管理画面は数えない）
+  if (parts[0] !== 'admin') {
+    const title = app.querySelector('h1')?.textContent?.trim() || 'みんなの声';
+    window.trackPage?.(`/${parts.filter(Boolean).join('/')}`, title);
+  }
   window.scrollTo(0, 0);
 }
 
