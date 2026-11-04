@@ -838,9 +838,61 @@ async function route(request, env) {
   return fail('見つかりません', 404);
 }
 
+// ---------- SNS でシェアするときのページ ----------
+// X・LINE・Facebook などは、リンクを貼るとこのページのタイトルや画像（OGP）を読んでカードにする。
+// 人が開いたときは、すぐテーマのページ（/#/poll/<番号>）へ移る。
+
+function escHtml(v) {
+  return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function sharePage(request, env, id) {
+  // SNS は https の絶対 URL を求めるので、必ず https にする
+  const origin = new URL(request.url).origin.replace(/^http:/, 'https:');
+  const poll = await env.DB.prepare('SELECT id, title, description, opens_at, closes_at FROM polls WHERE id = ?').bind(id).first();
+  if (!poll) return Response.redirect(`${origin}/`, 302);
+  const status = pollStatus(poll);
+  const voters = (await env.DB.prepare('SELECT COUNT(*) AS n FROM ballots WHERE poll_id = ?').bind(id).first()).n;
+  const lead = status === 'open' ? '投票受付中' : status === 'upcoming' ? 'まもなく受付開始' : '投票結果';
+  const title = `【${lead}】${poll.title}｜みんなの声`;
+  const desc = (poll.description || '').slice(0, 100)
+    || `年代・性別・年収・年金の受給状況ごとの意見の違いを、リアルタイムで公開しています。${voters ? `現在 ${voters} 人が投票。` : ''}`;
+  const target = `${origin}/#/poll/${id}`;
+  const html = `<!doctype html>
+<html lang="ja"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escHtml(title)}</title>
+<meta name="description" content="${escHtml(desc)}">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="みんなの声">
+<meta property="og:title" content="${escHtml(title)}">
+<meta property="og:description" content="${escHtml(desc)}">
+<meta property="og:url" content="${origin}/p/${id}">
+<meta property="og:image" content="${origin}/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="みんなの声 — 年代・性別・年収・年金の受給状況ごとに民意をリアルタイムで見える化する投票サイト">
+<meta property="og:locale" content="ja_JP">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${escHtml(title)}">
+<meta name="twitter:description" content="${escHtml(desc)}">
+<meta name="twitter:image" content="${origin}/og-image.png">
+<meta name="twitter:image:alt" content="みんなの声 — 民意をリアルタイムで見える化する投票サイト">
+<link rel="canonical" href="${origin}/p/${id}">
+<meta http-equiv="refresh" content="0; url=${escHtml(target)}">
+</head><body>
+<p><a href="${escHtml(target)}">${escHtml(poll.title)}</a> を開いています…</p>
+<script>location.replace(${JSON.stringify(target)});</script>
+</body></html>`;
+  return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=300' } });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    const share = url.pathname.match(/^\/p\/(\d+)\/?$/);
+    if (share) return sharePage(request, env, Number(share[1]));
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
     try {
       return await route(request, env);

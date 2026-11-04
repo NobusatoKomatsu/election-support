@@ -221,6 +221,33 @@ class MainActivity : ComponentActivity() {
         top.addView(badge(p.status))
         addView(top)
         addView(muted("#${p.id}　${fmt(p.opensAt)} 〜 ${fmt(p.closesAt)}\n投票 ${p.voters} 人・選択肢 ${p.options.size} 個"))
+        addView(ghost("SNS でシェア") { share(p) })
+    }
+
+    // ---------------- SNS でシェア ----------------
+    // Android の共有画面を出し、X・LINE・Facebook など、端末でログインしているアプリを選んで投稿する。
+    // リンクは /p/<番号>。SNS にはテーマのタイトルとアイコンのカードが出て、開くとテーマのページへ移る。
+
+    private fun shareText(p: Poll): String {
+        val url = "$server/p/${p.id}"
+        return when (p.status) {
+            "open" -> "【投票受付中】${p.title}\n" +
+                "${fmt(p.closesAt)} まで受付中。年代・性別・年収・年金の受給状況ごとの民意を、リアルタイムで公開しています。\n" +
+                "あなたの 1 票を聞かせてください👇\n$url\n#みんなの声"
+            "upcoming" -> "【${fmt(p.opensAt)} から受付開始】${p.title}\n" +
+                "年代・性別・年収・年金の受給状況ごとの民意を、リアルタイムで公開します。\n$url\n#みんなの声"
+            else -> "【投票結果】${p.title}\n" +
+                "${p.voters} 人が投票しました。年代・年収などの属性ごとの結果はこちら👇\n$url\n#みんなの声"
+        }
+    }
+
+    private fun share(p: Poll) {
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, p.title)
+            putExtra(Intent.EXTRA_TEXT, shareText(p))
+        }
+        startActivity(Intent.createChooser(send, "シェアする SNS を選ぶ"))
     }
 
     // ---------------- 画面: 作成・編集 ----------------
@@ -303,6 +330,7 @@ class MainActivity : ComponentActivity() {
         page.addView(save)
 
         if (poll != null) {
+            page.addView(primary("SNS でシェア") { share(poll) })
             page.addView(ghost("結果をブラウザで開く") {
                 startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("$server/#/poll/${poll.id}")))
             })
