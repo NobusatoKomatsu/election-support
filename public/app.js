@@ -138,7 +138,7 @@ function renderNav() {
   if (me?.user) {
     nav.innerHTML = `
       <span class="chip" title="使える票の数（上限 ${me.max_balance} 票）">持ち票 ${me.balance} 票</span>
-      <a href="#/me">${esc(me.user.login_id)}</a>
+      <a href="#/me">マイページ</a>
       <button class="linkish" id="logout">ログアウト</button>`;
     document.getElementById('logout').onclick = async () => {
       await api('/logout', { method: 'POST', body: {} });
