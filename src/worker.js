@@ -838,6 +838,26 @@ async function route(request, env) {
   return fail('見つかりません', 404);
 }
 
+// ---------- 検索エンジン向けのサイトマップ ----------
+// トップ・プライバシーポリシーと、テーマごとのシェア用ページ（/p/<番号>）を載せる
+
+async function sitemap(request, env) {
+  const origin = new URL(request.url).origin.replace(/^http:/, 'https:');
+  const polls = (await env.DB.prepare('SELECT id, created_at, opens_at, closes_at FROM polls ORDER BY id').all()).results;
+  const day = (ms) => new Date(ms).toISOString().slice(0, 10);
+  const now = Date.now();
+  const urls = [
+    `<url><loc>${origin}/</loc><changefreq>hourly</changefreq><priority>1.0</priority></url>`,
+    `<url><loc>${origin}/privacy</loc><changefreq>monthly</changefreq><priority>0.2</priority></url>`,
+    ...polls.filter((p) => p.opens_at <= now).map((p) =>
+      `<url><loc>${origin}/p/${p.id}</loc><lastmod>${day(Math.min(now, Math.max(p.opens_at, p.created_at)))}</lastmod>`
+      + `<changefreq>${p.closes_at > now ? 'hourly' : 'monthly'}</changefreq><priority>0.8</priority></url>`),
+  ];
+  return new Response(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join('\n')}\n</urlset>\n`, {
+    headers: { 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'public, max-age=3600' },
+  });
+}
+
 // ---------- SNS でシェアするときのページ ----------
 // X・LINE・Facebook などは、リンクを貼るとこのページのタイトルや画像（OGP）を読んでカードにする。
 // 人が開いたときは、すぐテーマのページ（/#/poll/<番号>）へ移る。
@@ -891,6 +911,7 @@ async function sharePage(request, env, id) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === '/sitemap.xml') return sitemap(request, env);
     const share = url.pathname.match(/^\/p\/(\d+)\/?$/);
     if (share) return sharePage(request, env, Number(share[1]));
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);

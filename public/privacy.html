@@ -28,7 +28,7 @@
   </header>
   <main class="wrap policy">
     <h1>プライバシーポリシー</h1>
-    <p class="muted small">制定日：2026年11月2日／改定日：2026年11月3日（LINE ログインとロボット対策の追加）</p>
+    <p class="muted small">制定日：2026年11月2日／改定日：2026年11月5日（アクセス解析の追加。11月3日に LINE ログインとロボット対策を追加）</p>
     <p>中央会計株式会社（以下「運営者」）は、投票サイト「みんなの声」（https://election.support/、以下「本サイト」）における利用者の情報の取り扱いについて、以下のとおり定めます。</p>
 
     <h2>1. 取得する情報と利用目的</h2>
@@ -57,6 +57,13 @@
     </ul>
     <p>本サイトで取得する属性（年代・年収など）や投票の内容を、広告配信事業者に提供することはありません。</p>
 
+    <h2>3-2. アクセス解析について</h2>
+    <p>本サイトは、利用状況を把握してサイトを改善するため、Google LLC のアクセス解析サービス「Google アナリティクス」を利用しています。Google アナリティクスは Cookie を使って、閲覧したページ、滞在時間、おおよその地域、ブラウザや端末の種類などの情報を収集します。これらの情報は個人を特定するものではなく、本サイトで取得する属性（年代・年収など）や投票の内容と結び付けることはありません。</p>
+    <ul>
+      <li>Google による情報の使われ方：<a href="https://policies.google.com/technologies/partner-sites?hl=ja" rel="noopener">Google のサービスを使用するサイトやアプリから収集した情報の Google による使用</a></li>
+      <li>収集を止める：<a href="https://tools.google.com/dlpage/gaoptout?hl=ja" rel="noopener">Google アナリティクス オプトアウト アドオン</a></li>
+    </ul>
+
     <h2>4. 外部のサービスへの情報の送信</h2>
     <div class="card table-wrap">
       <table>
@@ -64,7 +71,7 @@
         <tr><td>LY Corporation（LINE ヤフー株式会社、日本）</td><td>LINE ログインのため。LINE のログイン画面で利用者が認証し、本サイトは利用者を見分ける ID だけを受け取ります。</td></tr>
         <tr><td>Twilio Inc.（米国）</td><td>SMS で登録した方がパスワードを再設定するときに、入力された携帯電話番号と認証コードを送信します。</td></tr>
         <tr><td>Cloudflare, Inc.（米国）</td><td>本サイトの配信とデータの保存のため、1 の情報を Cloudflare のサーバーで扱います。また、ロボット対策（Turnstile）のため、登録・ログインの画面でブラウザの情報などが送信されます。</td></tr>
-        <tr><td>Google LLC（米国）</td><td>広告の表示のため、閲覧したページの URL、ブラウザの情報、Cookie などが送信されます。</td></tr>
+        <tr><td>Google LLC（米国）</td><td>広告の表示とアクセス解析（Google アナリティクス）のため、閲覧したページの URL、ブラウザの情報、Cookie などが送信されます。</td></tr>
       </table>
     </div>
     <p>LINE ヤフー株式会社を除き、これらの事業者は米国にあります。米国の個人情報の保護に関する制度は、<a href="https://www.ppc.go.jp/personalinfo/legal/kaiseihogohou/#gaikoku" rel="noopener">個人情報保護委員会のページ</a>で確認できます。各事業者は、個人情報の保護のための措置を講じています。</p>
@@ -97,5 +104,7 @@
   <footer class="wrap foot">
     <p>© 2026 中央会計株式会社</p>
   </footer>
+  <script src="/ga.js"></script>
+  <script>trackPage("/privacy", "プライバシーポリシー");</script>
 </body>
 </html>
