@@ -847,7 +847,8 @@ function escHtml(v) {
 }
 
 async function sharePage(request, env, id) {
-  const origin = new URL(request.url).origin;
+  // SNS は https の絶対 URL を求めるので、必ず https にする
+  const origin = new URL(request.url).origin.replace(/^http:/, 'https:');
   const poll = await env.DB.prepare('SELECT id, title, description, opens_at, closes_at FROM polls WHERE id = ?').bind(id).first();
   if (!poll) return Response.redirect(`${origin}/`, 302);
   const status = pollStatus(poll);
@@ -868,9 +869,16 @@ async function sharePage(request, env, id) {
 <meta property="og:title" content="${escHtml(title)}">
 <meta property="og:description" content="${escHtml(desc)}">
 <meta property="og:url" content="${origin}/p/${id}">
-<meta property="og:image" content="${origin}/icon-512.png">
+<meta property="og:image" content="${origin}/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="みんなの声 — 年代・性別・年収・年金の受給状況ごとに民意をリアルタイムで見える化する投票サイト">
 <meta property="og:locale" content="ja_JP">
-<meta name="twitter:card" content="summary">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${escHtml(title)}">
+<meta name="twitter:description" content="${escHtml(desc)}">
+<meta name="twitter:image" content="${origin}/og-image.png">
+<meta name="twitter:image:alt" content="みんなの声 — 民意をリアルタイムで見える化する投票サイト">
 <link rel="canonical" href="${origin}/p/${id}">
 <meta http-equiv="refresh" content="0; url=${escHtml(target)}">
 </head><body>
