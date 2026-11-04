@@ -1,0 +1,13 @@
+{
+  "name": "みんなの声",
+  "short_name": "みんなの声",
+  "description": "年代・性別・年収・年金の受給状況ごとに、民意をリアルタイムで見える化する投票サイト",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f7f9",
+  "theme_color": "#ffffff",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

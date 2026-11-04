@@ -125,7 +125,7 @@ async function lineStart(request, env) {
 }
 
 async function lineSubFromCode(env, request, code, nonce) {
-  if (env.LINE_DEV_MODE === '1') return new URL(request.url).searchParams.get('dev_sub') || 'U-dev-user';
+  if (env.LINE_DEV_MODE === '1') return { sub: new URL(request.url).searchParams.get('dev_sub') || 'U-dev-user' };
   const redirectUri = new URL('/api/line/callback', request.url).toString();
   const tokenRes = await fetch(LINE_TOKEN, {
     method: 'POST',
@@ -138,7 +138,7 @@ async function lineSubFromCode(env, request, code, nonce) {
   const token = await tokenRes.json().catch(() => ({}));
   if (!tokenRes.ok || !token.id_token) {
     console.error('LINE token failed', tokenRes.status, token.error, token.error_description);
-    return null;
+    return { error: `token_${token.error || tokenRes.status}` };
   }
   // ID トークンの署名・有効期限・nonce は LINE の検証 API に確かめてもらう
   const verifyRes = await fetch(LINE_VERIFY, {
@@ -149,9 +149,9 @@ async function lineSubFromCode(env, request, code, nonce) {
   const claims = await verifyRes.json().catch(() => ({}));
   if (!verifyRes.ok || !claims.sub) {
     console.error('LINE verify failed', verifyRes.status, claims.error, claims.error_description);
-    return null;
+    return { error: `idtoken_${claims.error || verifyRes.status}` };
   }
-  return claims.sub;
+  return { sub: claims.sub };
 }
 
 // LINE から戻ってきたところ。登録済みならログイン、未登録ならプロフィール入力へ
@@ -167,8 +167,10 @@ async function lineCallback(request, env, user) {
   const [state, nonce, mode] = (getCookie(request, 'line_oauth') || '').split('.');
   if (url.searchParams.get('error')) return back('login', 'line_error=cancel').res();
   if (!state || !safeEqual(state, url.searchParams.get('state') || '')) return back('login', 'line_error=state').res();
-  const sub = await lineSubFromCode(env, request, url.searchParams.get('code') || '', nonce);
-  if (!sub) return back('login', 'line_error=verify').res();
+  const got = await lineSubFromCode(env, request, url.searchParams.get('code') || '', nonce);
+  // 失敗の理由（invalid_client など）も画面に渡して、原因を調べやすくする
+  if (!got.sub) return back('login', `line_error=verify&detail=${encodeURIComponent(String(got.error).slice(0, 60))}`).res();
+  const sub = got.sub;
   const hash = await lineHash(env, sub);
   const owner = await env.DB.prepare('SELECT id, deleted_at FROM users WHERE line_hash = ?').bind(hash).first();
 

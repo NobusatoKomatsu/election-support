@@ -50,7 +50,8 @@ a { color: var(--accent); }
 
 .top { background: var(--surface); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
 .top-inner { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; flex-wrap: wrap; }
-.brand { font-weight: 700; font-size: 1.15rem; color: var(--text); text-decoration: none; }
+.brand { font-weight: 700; font-size: 1.15rem; color: var(--text); text-decoration: none; display: inline-flex; align-items: center; gap: 8px; }
+.brand img { width: 32px; height: 32px; border-radius: 50%; }
 #nav { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: .92rem; }
 #nav a { text-decoration: none; }
 .chip { background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-variant-numeric: tabular-nums; }
@@ -152,3 +153,4 @@ td.m { color: var(--minus); }
 .btn-line:hover { background: #05b34c; }
 details.card summary { cursor: pointer; font-weight: 600; }
 .ts:empty { display: none; }
+.msg { white-space: pre-line; }
