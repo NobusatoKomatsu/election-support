@@ -26,7 +26,9 @@
     "MAX_BALANCE": "3",
     // SMS 送信の上限（1 つの IP から 1 時間あたり／サイト全体で 1 日あたり）
     "SMS_LIMIT_PER_IP_HOUR": "5",
-    "SMS_LIMIT_PER_DAY": "500"
+    "SMS_LIMIT_PER_DAY": "500",
+    // 属性別・かけ合わせの集計で、これより少ない人数の区分は表示しない
+    "MIN_GROUP_SIZE": "5"
   }
   // 秘密の値は `npx wrangler secret put <名前>` で設定する（ここには書かない）
   //   ADMIN_TOKEN         管理画面のパスワード

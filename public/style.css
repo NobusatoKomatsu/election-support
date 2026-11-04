@@ -154,3 +154,23 @@ td.m { color: var(--minus); }
 details.card summary { cursor: pointer; font-weight: 600; }
 .ts:empty { display: none; }
 .msg { white-space: pre-line; }
+
+/* 結果: 表のセルの補足（人数・反対の割合） */
+td .sub { display: block; font-size: .72rem; color: var(--muted); line-height: 1.2; }
+td .sub.m { color: var(--minus); }
+.tabs.mode button { padding: 4px 12px; font-size: .88rem; }
+.cross-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.cross-controls label { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: .88rem; }
+.cross-controls select { width: auto; padding: 6px 8px; font-size: .9rem; max-width: 12em; }
+table.cross td { text-align: center; }
+table.cross td:first-child { text-align: left; }
+
+/* 凡例は折り返しても「賛成」「反対」の文字は割らない */
+.legend { flex-wrap: wrap; row-gap: 2px; }
+.legend span { white-space: nowrap; }
+.legend span.note { white-space: normal; flex-basis: 100%; }
+/* かけ合わせの表は横にスクロールする前提で、文字を縦に割らない */
+table.cross { font-size: .8rem; }
+table.cross th, table.cross td { padding: 6px 4px; }
+table.cross th { white-space: nowrap; vertical-align: bottom; }
+table.cross td:first-child, table.cross th:first-child { white-space: nowrap; position: sticky; left: 0; background: var(--surface); z-index: 1; }

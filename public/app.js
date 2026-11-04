@@ -387,11 +387,14 @@ async function pagePoll(id) {
     ${adUnit('result')}`;
   renderVote(poll, mine, balance);
   fillAds();
-  let dim = 'age_group';
+  // 表示の切り替え（票数／割合、属性、かけ合わせ）は 5 秒ごとの更新でも保つ
+  let view = { dim: 'age_group', mode: 'votes', rowDim: 'age_group', colDim: 'income', optId: null };
+  let last = null;
+  const draw = () => { if (last) renderResults(last, view, (v) => { view = v; draw(); }); };
   const refresh = async () => {
     try {
-      const r = await api(`/polls/${id}/results`);
-      renderResults(r, dim, (d) => { dim = d; refresh(); });
+      last = await api(`/polls/${id}/results`);
+      draw();
     } catch { /* 次の更新で再試行 */ }
   };
   await refresh();
@@ -467,47 +470,127 @@ function groupLabel(dim, key) {
   return ({ gender: GENDER, income: INCOME, pension: PENSION }[dim] || {})[key] ?? key;
 }
 
-function renderResults(r, dim, onDim) {
+const pct = (n, d) => (d ? Math.round((n / d) * 100) : 0);
+const heat = (color, strength) => `background:color-mix(in srgb, var(${color}) ${Math.round(Math.min(1, strength) * 55)}%, transparent)`;
+
+// view … { dim, mode: 'votes' | 'pct', rowDim, colDim, optId }。変わったら onChange(新しい view) を呼ぶ
+function renderResults(r, view, onChange) {
   const box = document.getElementById('results');
   if (!box) return;
+  const isPct = view.mode === 'pct';
   const opts = r.poll.options;
   const totals = opts.map((o) => ({ ...o, ...r.totals[o.id], net: r.totals[o.id].plus - r.totals[o.id].minus }));
-  const scale = Math.max(1, ...totals.map((t) => Math.max(t.plus, t.minus)));
   const ranked = [...totals].sort((a, b) => b.net - a.net);
+  const set = (patch) => onChange({ ...view, ...patch });
 
-  const bars = ranked.map((t) => `
+  // ---- 選択肢ごとの棒 ----
+  const scale = isPct ? 100 : Math.max(1, ...totals.map((t) => Math.max(t.plus, t.minus)));
+  const bars = ranked.map((t) => {
+    const forPct = pct(t.plus_voters, r.voters);
+    const againstPct = pct(t.minus_voters, r.voters);
+    const pos = isPct ? forPct : t.plus;
+    const neg = isPct ? againstPct : t.minus;
+    return `
     <div class="bar-row">
-      <div class="row"><span>${esc(t.label)}</span><span class="net">${signed(t.net)}</span></div>
-      <div class="track" role="img" aria-label="${esc(t.label)}: 賛成 ${t.plus} 票、反対 ${t.minus} 票">
-        <div class="neg"><span style="width:${(t.minus / scale) * 100}%"></span></div>
-        <div class="pos"><span style="width:${(t.plus / scale) * 100}%"></span></div>
+      <div class="row"><span>${esc(t.label)}</span><span class="net">${isPct ? `${forPct}%` : signed(t.net)}</span></div>
+      <div class="track" role="img" aria-label="${esc(t.label)}: 賛成 ${t.plus} 票（${forPct}%の人）、反対 ${t.minus} 票（${againstPct}%の人）">
+        <div class="neg"><span style="width:${(neg / scale) * 100}%"></span></div>
+        <div class="pos"><span style="width:${(pos / scale) * 100}%"></span></div>
       </div>
-      <div class="muted small">賛成 ${t.plus} 票・反対 ${t.minus} 票・${t.voters} 人</div>
-    </div>`).join('');
+      <div class="muted small">${isPct
+        ? `賛成した人 ${forPct}%（${t.plus_voters} 人）・反対した人 ${againstPct}%（${t.minus_voters} 人）`
+        : `賛成 ${t.plus} 票・反対 ${t.minus} 票・${t.voters} 人`}</div>
+    </div>`;
+  }).join('');
 
-  const groups = r.breakdown[dim] || {};
-  const keys = groupOrder(dim, Object.keys(groups));
+  // ---- 1 つの属性ごとの表 ----
+  const hiddenNote = `<p class="muted small">人数が ${r.min_group} 人未満の区分は、だれの票か分からないよう表示しません（—）。</p>`;
+  const cell = (c, n) => {
+    if (isPct) {
+      const f = pct(c.plus_voters, n);
+      const a = pct(c.minus_voters, n);
+      return `<td style="${heat('--plus', f / 100)}" title="賛成 ${c.plus_voters} 人 / 反対 ${c.minus_voters} 人">${f}%${a ? `<span class="sub m">反対 ${a}%</span>` : ''}</td>`;
+    }
+    const net = c.plus - c.minus;
+    return `<td class="${net > 0 ? 'p' : net < 0 ? 'm' : ''}" title="賛成 ${c.plus} 票 / 反対 ${c.minus} 票">${signed(net)}</td>`;
+  };
+  const groups = r.breakdown[view.dim] || {};
+  const keys = groupOrder(view.dim, Object.keys(groups));
   const table = keys.length ? `
     <div class="table-wrap"><table>
-      <tr><th>${DIMS[dim]}</th><th>人数</th>${opts.map((o) => `<th>${esc(o.label)}</th>`).join('')}</tr>
+      <tr><th>${DIMS[view.dim]}</th><th>人数</th>${opts.map((o) => `<th>${esc(o.label)}</th>`).join('')}</tr>
       ${keys.map((k) => {
         const g = groups[k];
-        return `<tr><td>${esc(groupLabel(dim, k))}</td><td>${g.voters}</td>${opts.map((o) => {
-          const c = g.options[o.id];
-          const net = c.plus - c.minus;
-          return `<td class="${net > 0 ? 'p' : net < 0 ? 'm' : ''}" title="賛成 ${c.plus} / 反対 ${c.minus}">${signed(net)}</td>`;
-        }).join('')}</tr>`;
+        if (g.hidden) return `<tr><td>${esc(groupLabel(view.dim, k))}</td><td class="muted">—</td>${opts.map(() => '<td class="muted">—</td>').join('')}</tr>`;
+        return `<tr><td>${esc(groupLabel(view.dim, k))}</td><td>${g.voters}</td>${opts.map((o) => cell(g.options[o.id], g.voters)).join('')}</tr>`;
       }).join('')}
     </table></div>` : '<p class="muted">まだ投票がありません。</p>';
 
+  // ---- 2 つの属性のかけ合わせ ----
+  const rowDim = view.rowDim;
+  const colDim = view.colDim === rowDim ? Object.keys(DIMS).find((d) => d !== rowDim) : view.colDim;
+  const optId = opts.some((o) => o.id === view.optId) ? view.optId : ranked[0]?.id;
+  const direct = r.cross[`${rowDim}|${colDim}`];
+  const crossCell = (rk, ck) => (direct ? direct[`${rk}|${ck}`] : r.cross[`${colDim}|${rowDim}`]?.[`${ck}|${rk}`]);
+  const rowKeys = groupOrder(rowDim, Object.keys(r.breakdown[rowDim] || {}));
+  const colKeys = groupOrder(colDim, Object.keys(r.breakdown[colDim] || {}));
+  const maxAbs = Math.max(1, ...rowKeys.flatMap((rk) => colKeys.map((ck) => {
+    const c = crossCell(rk, ck);
+    return c && !c.hidden ? Math.abs(c.options[optId].plus - c.options[optId].minus) : 0;
+  })));
+  const select = (name, value, entries) => `<select data-view="${name}">${entries.map(([k, v]) =>
+    `<option value="${esc(k)}"${String(k) === String(value) ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select>`;
+  const crossTable = rowKeys.length && colKeys.length ? `
+    <div class="table-wrap"><table class="cross">
+      <tr><th>${DIMS[rowDim]}＼${DIMS[colDim]}</th>${colKeys.map((ck) => `<th>${esc(groupLabel(colDim, ck))}</th>`).join('')}</tr>
+      ${rowKeys.map((rk) => `<tr><td>${esc(groupLabel(rowDim, rk))}</td>${colKeys.map((ck) => {
+        const c = crossCell(rk, ck);
+        if (!c) return '<td class="muted"></td>';
+        if (c.hidden) return '<td class="muted">—</td>';
+        const o = c.options[optId];
+        if (isPct) {
+          const f = pct(o.plus_voters, c.voters);
+          return `<td style="${heat('--plus', f / 100)}" title="${c.voters} 人中 賛成 ${o.plus_voters} 人">${f}%<span class="sub">${c.voters}人</span></td>`;
+        }
+        const net = o.plus - o.minus;
+        return `<td class="${net > 0 ? 'p' : net < 0 ? 'm' : ''}" style="${heat(net < 0 ? '--minus' : '--plus', Math.abs(net) / maxAbs)}" title="${c.voters} 人・賛成 ${o.plus} 票・反対 ${o.minus} 票">${signed(net)}<span class="sub">${c.voters}人</span></td>`;
+      }).join('')}</tr>`).join('')}
+    </table></div>` : '<p class="muted">まだ投票がありません。</p>';
+
+  const dimEntries = Object.entries(DIMS);
   box.innerHTML = `
     <div class="row"><strong>投票 ${r.voters} 人</strong><span class="muted small">更新 ${new Date(r.updated_at).toLocaleTimeString('ja-JP')}</span></div>
-    <div class="legend" style="margin:8px 0 14px"><span><i style="background:var(--plus)"></i>賛成票</span><span><i style="background:var(--minus)"></i>反対票</span><span>数字は 賛成−反対</span></div>
+    <div class="tabs mode" role="group" aria-label="表示のしかた" style="margin-top:10px">
+      <button data-mode="votes" aria-pressed="${!isPct}">票数</button>
+      <button data-mode="pct" aria-pressed="${isPct}">割合（%）</button>
+    </div>
+    <div class="legend" style="margin:4px 0 14px"><span><i style="background:var(--plus)"></i>賛成</span><span><i style="background:var(--minus)"></i>反対</span>
+      <span class="note">${isPct ? '数字は、投票した人のうち賛成票を入れた人の割合' : '数字は 賛成−反対 の票数'}</span></div>
     <div class="bars">${bars}</div>
-    <h2>属性別（賛成−反対）</h2>
-    <div class="tabs">${Object.entries(DIMS).map(([k, v]) => `<button data-dim="${k}" aria-pressed="${k === dim}">${v}</button>`).join('')}</div>
-    ${table}`;
-  box.querySelectorAll('[data-dim]').forEach((b) => { b.onclick = () => onDim(b.dataset.dim); });
+
+    <h2>属性別（${isPct ? '賛成した人の割合' : '賛成−反対'}）</h2>
+    <div class="tabs">${dimEntries.map(([k, v]) => `<button data-dim="${k}" aria-pressed="${k === view.dim}">${v}</button>`).join('')}</div>
+    ${table}
+
+    <h2>かけ合わせ</h2>
+    <div class="cross-controls">
+      <label>選択肢 ${select('optId', optId, opts.map((o) => [o.id, o.label]))}</label>
+      <label>縦 ${select('rowDim', rowDim, dimEntries)}</label>
+      <label>横 ${select('colDim', colDim, dimEntries.filter(([k]) => k !== rowDim))}</label>
+    </div>
+    <p class="muted small" style="margin:6px 0">「${esc(opts.find((o) => o.id === optId)?.label ?? '')}」に${isPct ? '賛成した人の割合' : '入った 賛成−反対 の票数'}を、${DIMS[rowDim]}と${DIMS[colDim]}の組み合わせごとに表示します。色が濃いほど${isPct ? '割合が高い' : '票が多い'}区分です。</p>
+    ${crossTable}
+    ${hiddenNote}`;
+
+  box.querySelectorAll('[data-dim]').forEach((b) => { b.onclick = () => set({ dim: b.dataset.dim }); });
+  box.querySelectorAll('[data-mode]').forEach((b) => { b.onclick = () => set({ mode: b.dataset.mode }); });
+  box.querySelectorAll('select[data-view]').forEach((el) => {
+    el.onchange = () => {
+      const k = el.dataset.view;
+      const v = k === 'optId' ? Number(el.value) : el.value;
+      set(k === 'rowDim' && v === colDim ? { rowDim: v, colDim: rowDim } : { [k]: v });
+    };
+  });
 }
 
 // ---------- 管理画面（一覧・作成・編集・削除・CSV） ----------

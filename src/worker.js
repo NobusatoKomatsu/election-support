@@ -620,38 +620,57 @@ async function vote(request, env, user, id) {
   return json({ ok: true, balance: balance - Math.abs(weight) });
 }
 
+// 集計結果。属性別とかけ合わせは、人数が少ない区分（MIN_GROUP_SIZE 人未満、初期値 5）を出さない
+// （「70歳以上・年収1,000万円以上・年金なし＝1人」のような区分から、誰がどう投票したか分かってしまうため）
+const DIM_KEYS = ['age_group', 'gender', 'income', 'pension'];
+
 async function results(request, env, id) {
   const poll = await getPoll(env, id);
   if (!poll) return fail('投票テーマが見つかりません', 404);
   const rows = (await env.DB.prepare(
     'SELECT option_id, weight, age_group, gender, income, pension FROM ballots WHERE poll_id = ?'
   ).bind(id).all()).results;
+  const minGroup = Math.max(1, Number(env.MIN_GROUP_SIZE || 5));
 
-  const blank = () => Object.fromEntries(poll.options.map((o) => [o.id, { plus: 0, minus: 0, voters: 0 }]));
+  // plus / minus … 票数、plus_voters / minus_voters … 賛成・反対した人数、voters … その選択肢に投票した人数
+  const blank = () => Object.fromEntries(poll.options.map((o) => [o.id, { plus: 0, minus: 0, voters: 0, plus_voters: 0, minus_voters: 0 }]));
   const add = (bucket, r) => {
     const t = bucket[r.option_id];
     if (!t) return;
-    if (r.weight > 0) t.plus += r.weight;
-    else t.minus += -r.weight;
+    if (r.weight > 0) { t.plus += r.weight; t.plus_voters += 1; } else { t.minus += -r.weight; t.minus_voters += 1; }
     t.voters += 1;
+  };
+  const group = (map, key, r) => {
+    map[key] ??= { voters: 0, options: blank() };
+    map[key].voters += 1;
+    add(map[key].options, r);
+  };
+  const hideSmall = (map) => {
+    for (const [k, g] of Object.entries(map)) if (g.voters < minGroup) map[k] = { hidden: true };
+    return map;
   };
 
   const totals = blank();
-  const dims = { age_group: {}, gender: {}, income: {}, pension: {} };
+  const breakdown = Object.fromEntries(DIM_KEYS.map((d) => [d, {}]));
+  const cross = {};
+  for (let i = 0; i < DIM_KEYS.length; i++) for (let j = i + 1; j < DIM_KEYS.length; j++) cross[`${DIM_KEYS[i]}|${DIM_KEYS[j]}`] = {};
   for (const r of rows) {
     add(totals, r);
-    for (const d of Object.keys(dims)) {
-      const key = String(r[d]);
-      dims[d][key] ??= { voters: 0, options: blank() };
-      dims[d][key].voters += 1;
-      add(dims[d][key].options, r);
+    for (const d of DIM_KEYS) group(breakdown[d], String(r[d]), r);
+    for (const pair of Object.keys(cross)) {
+      const [a, b] = pair.split('|');
+      group(cross[pair], `${r[a]}|${r[b]}`, r);
     }
   }
+  for (const d of DIM_KEYS) hideSmall(breakdown[d]);
+  for (const pair of Object.keys(cross)) hideSmall(cross[pair]);
   return json({
     poll,
     voters: rows.length,
     totals,
-    breakdown: dims,
+    breakdown,
+    cross,
+    min_group: minGroup,
     labels: { gender: GENDER, income: INCOME, pension: PENSION },
     updated_at: Date.now(),
   });
