@@ -3,6 +3,8 @@
   "name": "minnano-koe",
   "main": "src/worker.js",
   "compatibility_date": "2026-10-01",
+  // console.error などの記録を Cloudflare のダッシュボード（Workers → minnano-koe → ログ）で見られるようにする
+  "observability": { "enabled": true },
   // election.support で公開する（ドメインが同じ Cloudflare アカウントに追加済みであること）
   "routes": [{ "pattern": "election.support", "custom_domain": true }],
   "assets": {

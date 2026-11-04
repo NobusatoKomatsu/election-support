@@ -153,3 +153,4 @@ td.m { color: var(--minus); }
 .btn-line:hover { background: #05b34c; }
 details.card summary { cursor: pointer; font-weight: 600; }
 .ts:empty { display: none; }
+.msg { white-space: pre-line; }

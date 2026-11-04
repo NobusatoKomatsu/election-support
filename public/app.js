@@ -675,7 +675,12 @@ async function router() {
 // LINE から戻ってきたときの結果（?line_error=… / ?line_ok=…）を読み取り、アドレスからは消す
 function readLineResult() {
   const q = new URLSearchParams(location.search);
-  if (q.get('line_error')) flash = { text: LINE_MESSAGES[q.get('line_error')] || 'LINE でのログインに失敗しました。', kind: 'err' };
+  if (q.get('line_error')) {
+    const detail = q.get('detail') || '';
+    const hint = /invalid_client/.test(detail) ? 'サイトに設定した LINE のチャネルシークレットが、LINE Developers の値と一致していません。'
+      : /invalid_grant|redirect/.test(detail) ? 'LINE Developers のコールバック URL の設定を確かめてください。' : '';
+    flash = { text: `${LINE_MESSAGES[q.get('line_error')] || 'LINE でのログインに失敗しました。'}${hint ? `\n${hint}` : ''}${detail ? `（理由：${detail}）` : ''}`, kind: 'err' };
+  }
   else if (q.get('line_ok') === 'linked') flash = { text: 'LINE と連携しました。次からは LINE でログインできます。', kind: 'ok' };
   if (location.search) history.replaceState(null, '', location.pathname + location.hash);
 }
