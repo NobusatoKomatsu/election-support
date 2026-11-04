@@ -11,7 +11,8 @@
     "directory": "./public",
     "binding": "ASSETS",
     // /api/* だけ Worker で処理し、それ以外は静的ファイルを返す
-    "run_worker_first": ["/api/*"]
+    // /p/<番号> は SNS でシェアするときのアドレス（テーマごとのタイトル・画像を返してからテーマのページへ移る）
+    "run_worker_first": ["/api/*", "/p/*"]
   },
   "d1_databases": [
     {
