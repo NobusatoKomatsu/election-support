@@ -616,7 +616,7 @@ function pageAdmin() {
     const f = document.getElementById('t');
     f.onsubmit = async (e) => {
       e.preventDefault();
-      token = f.token.value;
+      token = f.token.value.trim();
       try { await api('/admin/polls', { headers: auth() }); remember(token); list(); }
       catch (err) { message(document.getElementById('m'), err.message); }
     };

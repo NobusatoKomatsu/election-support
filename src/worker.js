@@ -687,9 +687,11 @@ async function results(request, env, id) {
 
 // ---------- 管理者 ----------
 
+// 管理者トークンの確認。GitHub の Secrets に貼り付けたときに付いた前後の空白・改行は無視する
 function isAdmin(request, env) {
-  const auth = request.headers.get('authorization') || '';
-  return Boolean(env.ADMIN_TOKEN) && safeEqual(auth, `Bearer ${env.ADMIN_TOKEN}`);
+  const expected = String(env.ADMIN_TOKEN || '').trim();
+  const given = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+  return Boolean(expected) && safeEqual(given, expected);
 }
 
 function validatePollFields(body) {
