@@ -382,10 +382,12 @@ async function pagePoll(id) {
     <p class="muted small">受付 ${fmtDate(poll.opens_at)} 〜 ${fmtDate(poll.closes_at)}</p>
     ${poll.description ? `<p style="white-space:pre-wrap">${esc(poll.description)}</p>` : ''}
     <div id="vote"></div>
+    <div id="share"></div>
     <h2>結果 <span class="live">リアルタイム</span></h2>
     <div id="results" class="card"><p class="muted">読み込み中…</p></div>
     ${adUnit('result')}`;
   renderVote(poll, mine, balance);
+  renderShare(poll);
   fillAds();
   // 表示の切り替え（票数／割合、属性、かけ合わせ）は 5 秒ごとの更新でも保つ
   let view = { dim: 'age_group', mode: 'votes', rowDim: 'age_group', colDim: 'income', optId: null };
@@ -399,6 +401,50 @@ async function pagePoll(id) {
   };
   await refresh();
   timer = setInterval(() => { if (!document.hidden) refresh(); }, REFRESH_MS);
+}
+
+// ---------- この問いをシェア（自分がどれに投票したかは入れない） ----------
+// リンクは /p/<番号>?s=<SNS>。SNS ではテーマ名入りのカードになり、「経由」の集計にも使われる
+
+function shareText(poll) {
+  const lead = poll.status === 'closed' ? 'この問いの結果、みんなはどう考えた？' : 'この問い、あなたはどう思う？';
+  return `${lead}\n「${poll.title}」\n年代・年収などの属性ごとの民意を、リアルタイムで公開中。`;
+}
+
+function renderShare(poll) {
+  const box = document.getElementById('share');
+  if (!box) return;
+  const url = (s) => `${location.origin}/p/${poll.id}?s=${s}`;
+  const text = shareText(poll);
+  const enc = encodeURIComponent;
+  const links = [
+    ['x', 'X', `https://twitter.com/intent/tweet?text=${enc(text)}&url=${enc(url('x'))}&hashtags=${enc('みんなの声')}`],
+    ['line', 'LINE', `https://social-plugins.line.me/lineit/share?url=${enc(url('line'))}&text=${enc(text)}`],
+    ['facebook', 'Facebook', `https://www.facebook.com/sharer/sharer.php?u=${enc(url('fb'))}`],
+    ['threads', 'Threads', `https://www.threads.net/intent/post?text=${enc(`${text}\n${url('threads')}`)}`],
+  ];
+  box.innerHTML = `
+    <div class="share">
+      <div class="share-title">この問いをシェア <span class="muted small">あなたの投票先は表示されません</span></div>
+      <div class="share-buttons">
+        ${links.map(([k, label, href]) => `<a class="share-btn ${k}" href="${esc(href)}" target="_blank" rel="noopener">${label}</a>`).join('')}
+        ${navigator.share ? '<button type="button" class="share-btn more" id="share-more">その他（Instagram など）</button>' : ''}
+        <button type="button" class="share-btn copy" id="share-copy">リンクをコピー</button>
+      </div>
+      <div id="share-msg"></div>
+    </div>`;
+  box.querySelector('#share-more')?.addEventListener('click', async () => {
+    try { await navigator.share({ title: poll.title, text, url: url('other') }); } catch { /* キャンセル */ }
+  });
+  box.querySelector('#share-copy').addEventListener('click', async () => {
+    const u = `${location.origin}/p/${poll.id}`;
+    try {
+      await navigator.clipboard.writeText(u);
+      message(box.querySelector('#share-msg'), `リンクをコピーしました：${u}`, 'ok');
+    } catch {
+      message(box.querySelector('#share-msg'), `このリンクをコピーしてください：${u}`, 'ok');
+    }
+  });
 }
 
 function renderVote(poll, mine, balance) {

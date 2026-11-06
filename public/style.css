@@ -174,3 +174,17 @@ table.cross { font-size: .8rem; }
 table.cross th, table.cross td { padding: 6px 4px; }
 table.cross th { white-space: nowrap; vertical-align: bottom; }
 table.cross td:first-child, table.cross th:first-child { white-space: nowrap; position: sticky; left: 0; background: var(--surface); z-index: 1; }
+
+/* この問いをシェア */
+.share { margin: 14px 0 4px; }
+.share-title { font-weight: 700; font-size: .95rem; margin-bottom: 8px; }
+.share-title .muted { font-weight: 400; margin-left: 6px; }
+.share-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.share-btn { display: inline-flex; align-items: center; padding: 8px 14px; border-radius: 999px; font-size: .88rem; font-weight: 600;
+  text-decoration: none; border: 1px solid var(--line); background: var(--surface); color: var(--text); cursor: pointer; font-family: inherit; }
+.share-btn.x { background: #000; color: #fff; border-color: #000; }
+.share-btn.line { background: #06C755; color: #fff; border-color: #06C755; }
+.share-btn.facebook { background: #1877F2; color: #fff; border-color: #1877F2; }
+.share-btn.threads { background: #101010; color: #fff; border-color: #101010; }
+:root[data-theme="dark"] .share-btn.x, :root[data-theme="dark"] .share-btn.threads { border-color: var(--line); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .share-btn.x, :root:not([data-theme="light"]) .share-btn.threads { border-color: var(--line); } }
