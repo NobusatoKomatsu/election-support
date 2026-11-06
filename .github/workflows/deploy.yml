@@ -16,9 +16,6 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
-      TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
-      TWILIO_VERIFY_SID: ${{ secrets.TWILIO_VERIFY_SID }}
       ADMIN_TOKEN: ${{ secrets.VOTE_ADMIN_TOKEN }}
       PHONE_PEPPER: ${{ secrets.VOTE_PHONE_PEPPER }}
       LINE_CHANNEL_ID: ${{ secrets.LINE_CHANNEL_ID }}
@@ -36,27 +33,12 @@ jobs:
       - name: 必要な Secrets がそろっているか確認
         run: |
           missing=""
-          for n in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN ADMIN_TOKEN PHONE_PEPPER; do
+          for n in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID ADMIN_TOKEN PHONE_PEPPER; do
             [ -n "${!n}" ] || missing="$missing $n"
           done
           if [ -n "$missing" ]; then
             echo "::error::GitHub の Secrets が足りません:$missing（ADMIN_TOKEN は VOTE_ADMIN_TOKEN、PHONE_PEPPER は VOTE_PHONE_PEPPER という名前で登録）"
             exit 1
-          fi
-
-      - name: Twilio Verify サービスを用意（TWILIO_VERIFY_SID が無ければ「みんなの声」を探す／作る）
-        run: |
-          if [ -z "$TWILIO_VERIFY_SID" ]; then
-            auth="$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN"
-            sid=$(curl -fsS -u "$auth" "https://verify.twilio.com/v2/Services?PageSize=50" \
-              | jq -r '.services[] | select(.friendly_name == "みんなの声") | .sid' | head -1)
-            if [ -z "$sid" ]; then
-              sid=$(curl -fsS -u "$auth" -X POST "https://verify.twilio.com/v2/Services" \
-                --data-urlencode "FriendlyName=みんなの声" --data-urlencode "CodeLength=6" | jq -r '.sid')
-              echo "Twilio Verify サービスを作りました: $sid"
-            fi
-            [ -n "$sid" ] && [ "$sid" != "null" ] || { echo "::error::Twilio Verify サービスを用意できませんでした（SID / Auth Token を確認）"; exit 1; }
-            echo "TWILIO_VERIFY_SID=$sid" >> "$GITHUB_ENV"
           fi
 
       - name: D1 データベースを用意して wrangler.jsonc に ID を書き込む
@@ -82,12 +64,16 @@ jobs:
       - name: 秘密の値を Worker に登録
         run: |
           # LINE と Turnstile は登録されているものだけ渡す（未登録なら、その機能は「準備中」になる）
-          jq -n --arg a "$ADMIN_TOKEN" --arg p "$PHONE_PEPPER" --arg s "$TWILIO_ACCOUNT_SID" \
-                --arg t "$TWILIO_AUTH_TOKEN" --arg v "$TWILIO_VERIFY_SID" \
+          jq -n --arg a "$ADMIN_TOKEN" --arg p "$PHONE_PEPPER" \
                 --arg li "$LINE_CHANNEL_ID" --arg ls "$LINE_CHANNEL_SECRET" \
                 --arg tk "$TURNSTILE_SITE_KEY" --arg ts "$TURNSTILE_SECRET_KEY" \
-                '{ADMIN_TOKEN:$a, PHONE_PEPPER:$p, TWILIO_ACCOUNT_SID:$s, TWILIO_AUTH_TOKEN:$t, TWILIO_VERIFY_SID:$v,
-                  LINE_CHANNEL_ID:$li, LINE_CHANNEL_SECRET:$ls, TURNSTILE_SITE_KEY:$tk, TURNSTILE_SECRET_KEY:$ts}
+                '{ADMIN_TOKEN:$a, PHONE_PEPPER:$p, LINE_CHANNEL_ID:$li, LINE_CHANNEL_SECRET:$ls, TURNSTILE_SITE_KEY:$tk, TURNSTILE_SECRET_KEY:$ts}
                  | with_entries(select(.value != ""))' > "$RUNNER_TEMP/secrets.json"
           $WRANGLER secret bulk "$RUNNER_TEMP/secrets.json"
           rm -f "$RUNNER_TEMP/secrets.json"
+
+      - name: SMS 廃止で使わなくなった Twilio の鍵を Worker から消す（すでに無ければ何もしない）
+        run: |
+          for n in TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_VERIFY_SID; do
+            echo y | $WRANGLER secret delete "$n" >/dev/null 2>&1 && echo "削除: $n" || echo "なし: $n"
+          done
