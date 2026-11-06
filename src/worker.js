@@ -12,7 +12,8 @@
 //   - 新規登録は LINE ログインで行う（日本の LINE アカウントは電話番号ごとに 1 つなので、SMS 認証とほぼ同じ強さ）
 //   - LINE から受け取るのは利用者 ID（sub）だけ。それも秘密の鍵で HMAC した値だけを保存する
 //   - 以前 SMS で登録した人は、ID とパスワードでログインでき、マイページから LINE と連携できる
-//   - 退会しても HMAC は残し、同じ LINE（番号）で登録し直すと持ち票と投票履歴を引き継ぐ（二重投票の防止）
+//     （SMS の仕組みは廃止し、保存していた電話番号の HMAC も migration 0003 で消した）
+//   - 退会しても LINE の HMAC は残し、同じ LINE で登録し直すと持ち票と投票履歴を引き継ぐ（二重投票の防止）
 //   - 登録とパスワードでのログインには Cloudflare Turnstile（ロボット対策）をかける
 
 import '../public/source.js'; // どこから来たかの判定（画面と共通）
@@ -69,15 +70,7 @@ function safeEqual(a, b) {
   return diff === 0;
 }
 
-// ---------- SMS 認証 ----------
-
-// 日本の携帯番号（070 / 080 / 090）だけを受け付ける。固定電話や海外番号への送信で費用がかさむのを防ぐ
-export function normalizePhone(input) {
-  let d = String(input || '').replace(/[\s\-()（）ー－]/g, '').replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
-  if (d.startsWith('+81')) d = '0' + d.slice(3);
-  if (!/^0[789]0\d{8}$/.test(d)) throw bad('携帯電話番号（070・080・090 から始まる 11 桁）を入力してください');
-  return '+81' + d.slice(1);
-}
+// ---------- 識別子の HMAC（LINE の利用者 ID に使う） ----------
 
 async function phoneHash(env, e164) {
   if (!env.PHONE_PEPPER) throw new Error('PHONE_PEPPER が設定されていません');
@@ -85,7 +78,6 @@ async function phoneHash(env, e164) {
   return b64(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(e164)));
 }
 
-const devSms = (env) => env.SMS_DEV_MODE === '1';
 
 // ---------- LINE ログイン ----------
 
@@ -257,67 +249,12 @@ function siteConfig(env) {
   return json({
     line: lineEnabled(env),
     turnstile_site_key: env.TURNSTILE_SITE_KEY || null,
-    sms_reset: Boolean(env.TWILIO_ACCOUNT_SID) || devSms(env),
   });
 }
 
-async function twilio(env, path, params) {
-  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !env.TWILIO_VERIFY_SID) {
-    throw new Error('Twilio の設定（TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_VERIFY_SID）がありません');
-  }
-  const res = await fetch(`https://verify.twilio.com/v2/Services/${env.TWILIO_VERIFY_SID}/${path}`, {
-    method: 'POST',
-    headers: {
-      authorization: 'Basic ' + btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`),
-      'content-type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams(params),
-  });
-  const data = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, data };
-}
 
-async function sendSmsCode(env, e164) {
-  if (devSms(env)) {
-    console.log(`[SMS 開発モード] ${e164} に認証コード 000000 を送ったことにします`);
-    return;
-  }
-  const r = await twilio(env, 'Verifications', { To: e164, Channel: 'sms', Locale: 'ja' });
-  if (r.status === 429 || r.data.code === 60203) throw bad('この番号への送信回数が多すぎます。しばらくしてからお試しください', 429);
-  if (!r.ok) {
-    console.error('Twilio send failed', r.status, r.data);
-    throw bad('SMS を送れませんでした。番号を確かめてください');
-  }
-}
 
-async function checkSmsCode(env, e164, code) {
-  code = String(code || '').trim();
-  if (!/^\d{4,10}$/.test(code)) throw bad('SMS で届いた認証コードを入力してください');
-  if (devSms(env)) {
-    if (code !== '000000') throw bad('認証コードが違います');
-    return;
-  }
-  const r = await twilio(env, 'VerificationCheck', { To: e164, Code: code });
-  if (!r.ok || r.data.status !== 'approved') throw bad('認証コードが違うか、有効期限が切れています');
-}
 
-// SMS 送信の乱用（大量送信で費用を発生させる攻撃）を防ぐため、IP ごと・全体で回数を制限する
-async function limitSms(request, env) {
-  const ip = request.headers.get('cf-connecting-ip') || 'local';
-  const now = Date.now();
-  const perIp = Number(env.SMS_LIMIT_PER_IP_HOUR || 5);
-  const perDay = Number(env.SMS_LIMIT_PER_DAY || 500);
-  const [ipCount, dayCount] = await env.DB.batch([
-    env.DB.prepare('SELECT COUNT(*) AS n FROM sms_log WHERE ip = ? AND created_at > ?').bind(ip, now - 3600000),
-    env.DB.prepare('SELECT COUNT(*) AS n FROM sms_log WHERE created_at > ?').bind(now - 86400000),
-  ]);
-  if (ipCount.results[0].n >= perIp) throw bad('送信回数が多すぎます。1 時間ほどしてからお試しください', 429);
-  if (dayCount.results[0].n >= perDay) throw bad('本日の SMS 送信数が上限に達しました。明日お試しください', 429);
-  await env.DB.batch([
-    env.DB.prepare('INSERT INTO sms_log (ip, created_at) VALUES (?, ?)').bind(ip, now),
-    env.DB.prepare('DELETE FROM sms_log WHERE created_at < ?').bind(now - 86400000),
-  ]);
-}
 
 export function ageGroup(birthYear, now = Date.now()) {
   const age = new Date(now).getFullYear() - birthYear;
@@ -421,88 +358,10 @@ async function balanceOf(env, user, now = Date.now()) {
 
 // ---------- ハンドラ ----------
 
-// 手順 1: 認証コードを送る（purpose = register / reset）
-async function smsStart(request, env) {
-  const body = await readBody(request);
-  if (body.purpose !== 'reset' && env.SMS_REGISTER !== '1') throw bad('新規登録は「LINE で登録」からお願いします', 410);
-  await checkTurnstile(request, env, body.turnstile);
-  const e164 = normalizePhone(body.phone);
-  const hash = await phoneHash(env, e164);
-  const owner = await env.DB.prepare('SELECT deleted_at FROM users WHERE phone_hash = ?').bind(hash).first();
-  if (body.purpose === 'reset') {
-    if (!owner || owner.deleted_at) return fail('この電話番号のアカウントはありません', 404);
-  } else if (owner && !owner.deleted_at) {
-    return fail('この電話番号は登録済みです。パスワードを忘れた場合は「パスワードの再設定」から', 409);
-  }
-  await limitSms(request, env);
-  await sendSmsCode(env, e164);
-  return json({ ok: true });
-}
 
-function validateCredentials(body) {
-  const loginId = String(body.login_id || '').trim();
-  const password = String(body.password || '');
-  if (!/^[A-Za-z0-9_.-]{3,32}$/.test(loginId)) throw bad('ログインIDは半角英数字と _ . - で 3〜32 文字にしてください');
-  if (password.length < 8) throw bad('パスワードは 8 文字以上にしてください');
-  return { loginId, password };
-}
 
-async function newPassword(password) {
-  const salt = b64(crypto.getRandomValues(new Uint8Array(16)));
-  return { salt, hash: await hashPassword(password, salt) };
-}
 
-// 手順 2: 認証コードと一緒にアカウントを作る
-async function register(request, env) {
-  const body = await readBody(request);
-  if (env.SMS_REGISTER !== '1') throw bad('新規登録は「LINE で登録」からお願いします', 410);
-  const { loginId, password } = validateCredentials(body);
-  const profile = validateProfile(body);
-  const e164 = normalizePhone(body.phone);
-  const hash = await phoneHash(env, e164);
-  const owner = await env.DB.prepare('SELECT id, deleted_at FROM users WHERE phone_hash = ?').bind(hash).first();
-  if (owner && !owner.deleted_at) return fail('この電話番号は登録済みです', 409);
-  const taken = await env.DB.prepare('SELECT id FROM users WHERE login_id = ?').bind(loginId).first();
-  if (taken && taken.id !== owner?.id) return fail('このログインIDは使われています', 409);
-  // 入力をすべて確かめてからコードを照合する（照合するとコードは使い切りになるため）
-  await checkSmsCode(env, e164, body.code);
-  const pw = await newPassword(password);
-  let userId;
-  if (owner) {
-    // 退会した番号での再登録: 持ち票と投票履歴を引き継ぐ
-    await env.DB.prepare(
-      `UPDATE users SET login_id = ?, pw_hash = ?, pw_salt = ?, birth_year = ?, gender = ?, income = ?, pension = ?, deleted_at = NULL
-        WHERE id = ?`
-    ).bind(loginId, pw.hash, pw.salt, profile.birth_year, profile.gender, profile.income, profile.pension, owner.id).run();
-    userId = owner.id;
-  } else {
-    const res = await env.DB.prepare(
-      `INSERT INTO users (login_id, pw_hash, pw_salt, phone_hash, birth_year, gender, income, pension, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(loginId, pw.hash, pw.salt, hash, profile.birth_year, profile.gender, profile.income, profile.pension, Date.now()).run();
-    userId = res.meta.last_row_id;
-  }
-  const cookie = await createSession(env, userId);
-  return json({ ok: true, restored: Boolean(owner) }, 201, { 'set-cookie': cookie });
-}
 
-// パスワードを忘れたとき: SMS で本人確認してパスワードを付け直す（ログインIDも表示する）
-async function resetPassword(request, env) {
-  const body = await readBody(request);
-  const password = String(body.password || '');
-  if (password.length < 8) throw bad('パスワードは 8 文字以上にしてください');
-  const e164 = normalizePhone(body.phone);
-  const user = await env.DB.prepare('SELECT id, login_id FROM users WHERE phone_hash = ? AND deleted_at IS NULL')
-    .bind(await phoneHash(env, e164)).first();
-  if (!user) return fail('この電話番号のアカウントはありません', 404);
-  await checkSmsCode(env, e164, body.code);
-  const pw = await newPassword(password);
-  await env.DB.batch([
-    env.DB.prepare('UPDATE users SET pw_hash = ?, pw_salt = ? WHERE id = ?').bind(pw.hash, pw.salt, user.id),
-    env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(user.id),
-  ]);
-  return json({ ok: true, login_id: user.login_id }, 200, { 'set-cookie': await createSession(env, user.id) });
-}
 
 async function login(request, env) {
   const body = await readBody(request);
@@ -829,9 +688,9 @@ async function route(request, env) {
   if (path === '/api/line/start' && method === 'GET') return lineStart(request, env);
   if (path === '/api/line/callback' && method === 'GET') return lineCallback(request, env, user);
   if (path === '/api/line/register' && method === 'POST') return lineRegister(request, env);
-  if (path === '/api/sms/start' && method === 'POST') return smsStart(request, env);
-  if (path === '/api/register' && method === 'POST') return register(request, env);
-  if (path === '/api/reset-password' && method === 'POST') return resetPassword(request, env);
+  if (['/api/sms/start', '/api/register', '/api/reset-password'].includes(path)) {
+    return fail('SMS による登録・パスワードの再設定は終了しました。「LINE で登録」またはマイページの「LINE と連携する」をお使いください', 410);
+  }
   if (path === '/api/login' && method === 'POST') return login(request, env);
   if (path === '/api/logout' && method === 'POST') return logout(request, env);
   if (path === '/api/me' && method === 'GET') return me(request, env, user);

@@ -22,9 +22,9 @@ Cloudflare Workers（画面と API）と Cloudflare D1（データベース）�
 - 新規登録は LINE ログインで行う。日本の LINE アカウントは電話番号ごとに 1 つなので、SMS 認証とほぼ同じ強さで、費用はかからない
 - LINE から受け取るのは利用者 ID（`sub`）だけ（scope は `openid` のみ）。それも `PHONE_PEPPER` で HMAC した値だけを保存する
 - 退会しても HMAC は残す。同じ LINE で登録し直すと持ち票と投票履歴を引き継ぐので、退会→再登録で二重投票はできない
-- 以前 SMS で登録した人は ID とパスワードでログインでき、マイページから LINE と連携できる（SMS でのパスワード再設定も残している）
-- 新規の SMS 登録は止めている（`SMS_REGISTER=1` で再開できる）
-- 登録・パスワードでのログイン・SMS の送信には Cloudflare Turnstile（ロボット対策）をかける
+- 以前 SMS で登録した人は ID とパスワードでログインでき、マイページから LINE と連携できる
+- SMS 認証（Twilio）は廃止した。保存していた電話番号の HMAC と送信記録は migration 0003 で削除済み（パスワードの再設定はできない）
+- 登録とパスワードでのログインには Cloudflare Turnstile（ロボット対策）をかける
 - データベースの変更は `migrations/` に置き、公開のたびに `wrangler d1 migrations apply` でまだのものだけ当てる
 
 ## 画面
@@ -32,8 +32,7 @@ Cloudflare Workers（画面と API）と Cloudflare D1（データベース）�
 | URL | 内容 |
 |---|---|
 | `/#/` | テーマ一覧 |
-| `/#/register` `/#/login` | アカウント作成（SMS 認証）・ログイン |
-| `/#/reset` | パスワードの再設定（SMS 認証） |
+| `/#/register` `/#/login` | アカウント作成（LINE ログイン）・ログイン |
 | `/#/poll/<番号>` | 投票と結果（5 秒ごとに自動更新） |
 | `/#/me` | 持ち票・投票履歴・プロフィール・退会 |
 | `/#/admin` | テーマの一覧・作成・編集・削除、CSV 書き出し（管理者トークンが必要） |
@@ -41,22 +40,17 @@ Cloudflare Workers（画面と API）と Cloudflare D1（データベース）�
 ## 公開手順（GitHub Actions で自動）
 
 `.github/workflows/deploy.yml` が、D1 の作成・テーブル作成・公開・秘密の値の登録まで行います。
-Twilio の Verify サービス（名前「みんなの声」）も無ければ自動で作ります。
 
 1. **Cloudflare の API トークンを作る**：ダッシュボード → My Profile → API Tokens → Create Token →
    テンプレート「Edit Cloudflare Workers」を選び、権限に **Account / D1 / Edit** を追加して作成
-2. **Twilio 側の準備**：トライアルなら有料に切り替える。Verify → Settings → Geo permissions で **Japan** を有効にする
 3. **GitHub の Secrets に登録**（リポジトリ → Settings → Secrets and variables → Actions → New repository secret）
 
    | 名前 | 中身 |
    |---|---|
    | `CLOUDFLARE_API_TOKEN` | 1 で作ったトークン |
    | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare ダッシュボードの Workers 画面右側に出る Account ID |
-   | `TWILIO_ACCOUNT_SID` | Twilio コンソールの Account SID（AC...） |
-   | `TWILIO_AUTH_TOKEN` | Twilio コンソールの Auth Token |
    | `VOTE_ADMIN_TOKEN` | 管理画面のパスワード（長いランダム文字列） |
-   | `VOTE_PHONE_PEPPER` | 電話番号を HMAC する鍵（長いランダム文字列。**一度決めたら変えない・別に控えておく**） |
-   | `TWILIO_VERIFY_SID`（任意） | 既存の Verify サービスを使う場合だけ |
+   | `VOTE_PHONE_PEPPER` | LINE の利用者 ID を HMAC する鍵（長いランダム文字列。**一度決めたら変えない・別に控えておく**） |
    | `LINE_CHANNEL_ID` / `LINE_CHANNEL_SECRET` | LINE Developers の LINE ログインチャネルの Channel ID / Channel secret（未登録なら LINE ログインは「準備中」） |
    | `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile のサイトキー / シークレットキー（未登録ならロボット対策なし） |
 
@@ -70,10 +64,7 @@ npx wrangler login
 npx wrangler d1 create minnano-koe          # 表示された database_id を wrangler.jsonc に書く
 npx wrangler d1 execute minnano-koe --remote --file=schema.sql
 npx wrangler secret put ADMIN_TOKEN          # 管理画面用の長いランダム文字列
-npx wrangler secret put PHONE_PEPPER         # 電話番号を HMAC する長いランダム文字列（一度決めたら変えない）
-npx wrangler secret put TWILIO_ACCOUNT_SID   # Twilio コンソールの Account SID
-npx wrangler secret put TWILIO_AUTH_TOKEN    # Twilio コンソールの Auth Token
-npx wrangler secret put TWILIO_VERIFY_SID    # Verify → Services で作ったサービスの SID（VA...）
+npx wrangler secret put PHONE_PEPPER         # LINE の利用者 ID を HMAC する長いランダム文字列（一度決めたら変えない）
 npx wrangler deploy
 ```
 

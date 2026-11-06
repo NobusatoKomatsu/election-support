@@ -32,7 +32,7 @@ const app = document.getElementById('app');
 const nav = document.getElementById('nav');
 let me = null; // { user, balance, max_balance, history }
 let timer = null;
-let config = { line: false, turnstile_site_key: null, sms_reset: false };
+let config = { line: false, turnstile_site_key: null };
 let flash = null; // 次の画面の上に出すお知らせ { text, kind }
 
 // ---------- Cloudflare Turnstile（ロボット対策） ----------
@@ -190,7 +190,7 @@ function pageLogin() {
         <div class="ts"></div>
         <div id="m"></div>
         <button>ログイン</button>
-        ${config.sms_reset ? '<p class="small" style="margin:0"><a href="#/reset">パスワード・ログインIDを忘れた</a></p>' : ''}
+        <p class="muted small" style="margin:0">パスワードを忘れた場合は再設定できません。「LINE で登録」から新しく登録してください。</p>
       </form>
     </details>`;
   const f = document.getElementById('f');
@@ -202,45 +202,6 @@ function pageLogin() {
       await loadMe();
       location.hash = '#/';
     } catch (err) { message(document.getElementById('m'), err.message); ts.reset(); }
-  };
-}
-
-function smsFields() {
-  return `
-    <fieldset>
-      <legend>携帯電話番号の確認</legend>
-      <div style="display:grid;gap:10px">
-        <label>携帯電話番号 <span class="hint">1 つの番号につき 1 アカウントです。番号そのものは保存しません</span>
-          <input name="phone" type="tel" inputmode="tel" autocomplete="tel-national" placeholder="090-1234-5678" required>
-        </label>
-        <button type="button" class="ghost" id="send">認証コードを SMS で送る</button>
-        <div id="sm"></div>
-        <label>認証コード <span class="hint">SMS で届いた数字</span>
-          <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" required>
-        </label>
-      </div>
-    </fieldset>`;
-}
-
-function wireSms(form, purpose, ts) {
-  const btn = form.querySelector('#send');
-  const box = form.querySelector('#sm');
-  btn.onclick = async () => {
-    btn.disabled = true;
-    try {
-      await api('/sms/start', { method: 'POST', body: { phone: form.phone.value, purpose, turnstile: ts?.token() } });
-      message(box, 'SMS を送りました。届いたコードを入力してください', 'ok');
-      form.code.focus();
-      let wait = 60;
-      const tick = setInterval(() => {
-        btn.textContent = wait > 0 ? `再送できるまで ${wait--} 秒` : '認証コードを再送する';
-        if (wait < 0) { clearInterval(tick); btn.disabled = false; }
-      }, 1000);
-    } catch (err) {
-      message(box, err.message);
-      btn.disabled = false;
-      ts?.reset();
-    }
   };
 }
 
@@ -292,35 +253,6 @@ function pageLineRegister() {
   };
 }
 
-function pageReset() {
-  app.innerHTML = `
-    <h1>パスワードの再設定</h1>
-    <p class="muted">登録した携帯電話番号に SMS を送って本人確認します。ログインIDも表示します。</p>
-    <div class="card">
-      <form id="f">
-        ${smsFields()}
-        <div class="ts"></div>
-        <label>新しいパスワード <span class="hint">8 文字以上</span>
-          <input name="password" type="password" autocomplete="new-password" minlength="8" required>
-        </label>
-        <div id="m"></div>
-        <button>再設定してログイン</button>
-      </form>
-    </div>`;
-  const f = document.getElementById('f');
-  const ts = turnstileBox(f.querySelector('.ts'));
-  wireSms(f, 'reset', ts);
-  f.onsubmit = async (e) => {
-    e.preventDefault();
-    try {
-      const r = await api('/reset-password', { method: 'POST', body: formData(f) });
-      await loadMe();
-      flash = { text: `パスワードを再設定しました。ログインIDは「${r.login_id}」です。`, kind: 'ok' };
-      location.hash = '#/';
-    } catch (err) { message(document.getElementById('m'), err.message); }
-  };
-}
-
 async function pageMe() {
   await loadMe();
   if (!me.user) { location.hash = '#/login'; return; }
@@ -355,7 +287,7 @@ async function pageMe() {
     <h2>退会</h2>
     <div class="card">
       <p class="small" style="margin-top:0">プロフィールとログインの情報を削除します。投票済みの票は集計に残ります。
-        二重投票を防ぐため、同じ LINE アカウント（または電話番号）で登録し直すと、持ち票と投票履歴を引き継ぎます。</p>
+        二重投票を防ぐため、同じ LINE アカウントで登録し直すと、持ち票と投票履歴を引き継ぎます。</p>
       <button class="danger" id="del">アカウントを削除</button>
     </div>`;
   const f = document.getElementById('f');
@@ -786,7 +718,6 @@ async function router() {
     if (parts[0] === 'login') pageLogin();
     else if (parts[0] === 'register') pageRegister();
     else if (parts[0] === 'line-register') pageLineRegister();
-    else if (parts[0] === 'reset') pageReset();
     else if (parts[0] === 'me') await pageMe();
     else if (parts[0] === 'admin') pageAdmin();
     else if (parts[0] === 'poll' && /^\d+$/.test(parts[1])) await pagePoll(Number(parts[1]));

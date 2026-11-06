@@ -25,16 +25,11 @@
   "vars": {
     // 持ち越せる票の上限（溜め込みすぎ防止）
     "MAX_BALANCE": "3",
-    // SMS 送信の上限（1 つの IP から 1 時間あたり／サイト全体で 1 日あたり）
-    "SMS_LIMIT_PER_IP_HOUR": "5",
-    "SMS_LIMIT_PER_DAY": "500",
     // 属性別・かけ合わせの集計で、これより少ない人数の区分は表示しない
     "MIN_GROUP_SIZE": "5"
   }
   // 秘密の値は `npx wrangler secret put <名前>` で設定する（ここには書かない）
   //   ADMIN_TOKEN         管理画面のパスワード
-  //   PHONE_PEPPER        電話番号を HMAC する鍵（一度決めたら変えない）
-  //   TWILIO_ACCOUNT_SID  Twilio のアカウント SID
-  //   TWILIO_AUTH_TOKEN   Twilio の Auth Token
-  //   TWILIO_VERIFY_SID   Twilio Verify のサービス SID（VA から始まる）
+  //   PHONE_PEPPER        LINE の利用者 ID を HMAC する鍵（一度決めたら変えない）
+  //   LINE_CHANNEL_ID / LINE_CHANNEL_SECRET、TURNSTILE_SITE_KEY / TURNSTILE_SECRET_KEY
 }
