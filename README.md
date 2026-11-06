@@ -71,8 +71,8 @@ npx wrangler deploy
 ## 手元で動かす
 
 ```sh
-# SMS_DEV_MODE=1 だと SMS を送らず、認証コード 000000 で通る。LINE_DEV_MODE=1 だと LINE に行かず架空の利用者で戻る（本番では設定しない）
-printf 'ADMIN_TOKEN=test-admin\nPHONE_PEPPER=dev-pepper\nSMS_DEV_MODE=1\nLINE_DEV_MODE=1\n' > .dev.vars
+# LINE_DEV_MODE=1 だと LINE に行かず架空の利用者で戻る（本番では設定しない）
+printf 'ADMIN_TOKEN=test-admin\nPHONE_PEPPER=dev-pepper\nLINE_DEV_MODE=1\n' > .dev.vars
 npx wrangler d1 migrations apply minnano-koe --local
 npx wrangler d1 execute minnano-koe --local --file=schema.sql
 npx wrangler dev
@@ -85,9 +85,8 @@ npx wrangler dev
 
 ## 注意（本番前に検討すること）
 
-- **SMS 認証でも完全な 1 人 1 票ではない**：複数の携帯番号（SMS 付きデータ SIM など）を持つ人は複数アカウントを作れる。
+- **LINE ログインでも完全な 1 人 1 票ではない**：複数の電話番号（＝複数の LINE アカウント）を持つ人は複数アカウントを作れる。
   さらに厳密にするならマイナンバーカードの公的個人認証（JPKI）が必要。
-- SMS は 1 通ごとに費用がかかる（Twilio Verify の認証料 + 日本向け SMS 料金）。最新の料金は Twilio の料金ページで確認。
 - `PHONE_PEPPER` をなくしたり変えたりすると、既存の番号と照合できなくなる。安全な場所に控えておく。
 - ログイン試行の回数制限がない（Cloudflare の Rate Limiting ルールで追加できる）。
 - 結果の自動更新は 5 秒ごとの再読み込み。利用者が増えたら結果を数秒キャッシュするとよい。
